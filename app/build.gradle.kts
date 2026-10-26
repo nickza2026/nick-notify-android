@@ -14,6 +14,17 @@ android {
         versionName = "0.6.0-safety-poc"
         testInstrumentationRunner = "dev.notifyalarm.AlarmInstrumentation"
     }
+    signingConfigs {
+        getByName("debug") {
+            // Only CI sets this path. Local debug builds retain Android's usual keystore.
+            System.getenv("NOTIFY_CI_DEBUG_KEYSTORE")?.takeIf { it.isNotBlank() }?.let { path ->
+                storeFile = file(path)
+                storePassword = "android"
+                keyAlias = "androiddebugkey"
+                keyPassword = "android"
+            }
+        }
+    }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17

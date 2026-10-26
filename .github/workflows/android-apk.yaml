@@ -76,14 +76,25 @@ jobs:
         run: |
           set -euo pipefail
           umask 077
-          mkdir -p "$HOME/.android"
-          printf '%s' "$DEBUG_KEYSTORE_B64" | base64 --decode > "$HOME/.android/debug.keystore"
+          printf '%s' "$DEBUG_KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/notify-debug.keystore"
+          if ! certificate=$(keytool -list -v -keystore "$RUNNER_TEMP/notify-debug.keystore" \
+            -storepass android -alias androiddebugkey 2>/dev/null); then
+            echo '::error::Uploaded debug keystore is unreadable or does not have the expected alias.'
+            exit 1
+          fi
+          fingerprint=$(printf '%s\n' "$certificate" | awk '/^[[:space:]]*SHA256:/ {print $2; exit}' |
+            tr -d ':' | tr '[:upper:]' '[:lower:]')
+          if [ "$fingerprint" != '79c26a1c9329aa69933eada6c5e13b7718d43ae1da90120de639fe23f10cc9d4' ]; then
+            echo '::error::Uploaded keystore does not match the existing Pixel APK signer; no APK built.'
+            exit 1
+          fi
           printf '%s' "$FIREBASE_CLIENT_B64" | base64 --decode > "$RUNNER_TEMP/notify-google-services.json"
           pwsh -NoProfile -File ./scripts/configure-firebase.ps1 -GoogleServicesJson "$RUNNER_TEMP/notify-google-services.json"
           test -s app/src/main/res/values/firebase-local.xml
       - name: Build APK with Firebase client and original signing key
         env:
           JAVA_OPTS: "-Duser.language=en -Duser.country=US"
+          NOTIFY_CI_DEBUG_KEYSTORE: ${{ runner.temp }}/notify-debug.keystore
         run: |
           chmod +x ./gradlew
           ./gradlew :app:assembleDebug :app:testDebugUnitTest :app:lintDebug --no-daemon --console=plain
@@ -113,5 +124,5 @@ jobs:
       - name: Remove private runner files
         if: always()
         run: |
-          rm -f "$RUNNER_TEMP/notify-google-services.json" "$HOME/.android/debug.keystore" \
+          rm -f "$RUNNER_TEMP/notify-google-services.json" "$RUNNER_TEMP/notify-debug.keystore" \
             app/src/main/res/values/firebase-local.xml
