@@ -1,0 +1,13 @@
+# ประวัติการแจ้งเตือน (เฉพาะ localhost)
+
+Build Docker/CI สำหรับ backoffice อยู่ที่ [คู่มือ build ภาษาไทย](../docs/backoffice-build-th.md): ใช้ `dashboard/Dockerfile`, context `dashboard/`, Next standalone และ `.github/workflows/web-staging.yaml` แบบ build/test/artifact เท่านั้น ไม่มี push/deploy อัตโนมัติ และยังไม่เปิด public access
+
+แดชบอร์ดอ่านอย่างเดียวสำหรับ API ประวัติการแจ้งเตือน ไม่ส่งแจ้งเตือนหรือบันทึกการแตะรับทราบ ต้องใช้ Node.js และ pnpm; ในโฟลเดอร์ `dashboard` เรียก `pnpm install`, `pnpm dev` และเปิด `http://127.0.0.1:3010` (production: `pnpm build` แล้ว `pnpm start`) เซิร์ฟเวอร์ผูกเฉพาะ 127.0.0.1 ห้ามเปิดให้เครือข่ายภายนอกโดยไม่มีระบบยืนยันตัวตนเพิ่มเติม
+
+ค่า environment **เฉพาะฝั่งเซิร์ฟเวอร์**: `BACKEND_URL` (ค่าเริ่มต้น `http://127.0.0.1:8791`), `BACKEND_API_KEY_FILE` (พาธไฟล์กุญแจที่อ่านได้เฉพาะเซิร์ฟเวอร์), หรือ `BACKEND_API_KEY` (ตัวเลือกสำรอง); ใช้ `Authorization: Bearer <key>` กับ backend โดยค่าจากไฟล์มีลำดับความสำคัญกว่า environment key ห้ามใช้ `NEXT_PUBLIC_` กับกุญแจหรือใส่ค่าจริงใน repository และอย่าป้อนกุญแจผ่านหน้าเว็บ Backend ต้องให้สิทธิ์ GET `/v1/history`, `/v1/stats`, `/v1/alerts/{id}` เท่านั้น เมื่อ `DASHBOARD_DEMO_MODE=true` จะแสดงป้ายถาวร “ข้อมูลสาธิต — ไม่ใช่ประวัติการส่งจริง”; โหมดนี้ไม่ได้สร้างข้อมูลตัวอย่างและไม่ซ่อนข้อผิดพลาดจาก API
+
+ตัวกรองวันที่ใช้วันตาม Asia/Bangkok แล้วแปลงเป็น UTC ตั้งแต่วันแรกจนถึงเที่ยงคืนถัดจากวันสุดท้ายที่เลือกแบบ exclusive; เวลาแสดงเป็น พ.ศ. พร้อม UTC+7 สถิติใช้เฉพาะช่วงวันที่ ไม่ใช้สถานะรายการ จำนวนการแตะรวมเป็นค่า `ack_action_count` จากเซิร์ฟเวอร์ (นับ `client_action_id` ไม่ซ้ำข้ามเหตุการณ์) ห้ามบวกจำนวนแตะรายเหตุการณ์เป็นยอดรวม ตารางใช้ `acknowledged_at` เป็นเวลารับทราบครั้งแรกและ `last_ack_at` เป็นครั้งล่าสุด; รายละเอียดแสดง action timeline แยก clock ของอุปกรณ์จาก server ข้อมูลผู้ให้บริการรับคำขอไม่ใช่หลักฐานว่าเครื่องรับหรือส่งเสียง
+
+BFF จำกัด HTTP เฉพาะ loopback (URL อื่นต้อง HTTPS), ไม่ตาม redirect, จำกัด upstream response 1 MiB และส่งต่อเฉพาะ DTO fields ที่ตรวจ schema แล้ว ไม่ forward field แปลก/credential ที่ upstream อาจส่งเกินมา จำนวน `null` แสดงไม่ทราบ ไม่แปลงเป็นศูนย์ และ 0 Ack ที่ยืนยันจาก API แสดงว่ายังไม่มีการรับทราบ
+
+ตรวจสอบ: `pnpm test`, `pnpm typecheck`, `pnpm build`; เปิดจอ desktop และมือถือกว้าง 360px ตรวจการโหลดแยกภาพรวม/รายการ/รายละเอียด, รายการว่าง, ป้ายสาธิต, หน้า 401, การโหลดเพิ่มเติม, เปิด/ปิดรายละเอียดด้วย Esc และปุ่ม, และไม่แสดงข้อความลับจาก backend ขณะ API ล้มเหลว การ build ไม่ต้องเชื่อม backend จริง

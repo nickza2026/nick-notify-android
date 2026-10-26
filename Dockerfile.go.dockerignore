@@ -1,0 +1,13 @@
+# Dedicated allowlist: never include private keys, token files, emulator data or source backups.
+**
+!Dockerfile.go
+!backend/
+!backend/go.mod
+!backend/go.sum
+!backend/*.go
+backend/*_test.go
+!backend/migrations/
+!backend/migrations/*.sql
+!backend/cmd/
+!backend/cmd/notify-api/
+!backend/cmd/notify-api/*.go

@@ -1,0 +1,9 @@
+{
+  "scout": "inherit",
+  "implementer": "inherit",
+  "verifier": "inherit",
+  "advisor": "inherit",
+  "git-publisher": "inherit",
+  "db-reviewer": "inherit",
+  "security-reviewer": "inherit"
+}

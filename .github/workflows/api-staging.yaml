@@ -1,0 +1,56 @@
+# Build-only until the Notify API's registry and deployment target are approved.
+name: Validate Notify Go API
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/api-staging.yaml"
+      - "backend/**"
+      - "Dockerfile.go"
+      - "Dockerfile.go.dockerignore"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - name: Cache embedded postgres binaries
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/notify-alarm/embedded-postgres
+          key: embedded-postgres-${{ runner.os }}-${{ hashFiles('backend/go.sum') }}
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
+      - run: go vet ./...
+      - run: go test ./... -count=1 -timeout=8m
+
+  dockerize:
+    name: Build Image (no publish)
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Build container image
+        uses: docker/build-push-action@v6
+        with:
+          platforms: linux/amd64
+          pull: true
+          push: false
+          context: .
+          file: ./Dockerfile.go

@@ -1,0 +1,9 @@
+# Example only: not included in kustomization. Use a real reachable HTTPS origin.
+# Do not apply with this example hostname or claim public routing is configured.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: notify-alarm-config
+  namespace: notify-alarm
+data:
+  ACK_PUBLIC_BASE_URL: https://alerts.example.com

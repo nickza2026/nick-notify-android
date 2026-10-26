@@ -1,0 +1,117 @@
+name: Build Android Alarm APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/android-apk.yaml"
+      - "app/**"
+      - "gradle/**"
+      - "build.gradle.kts"
+      - "settings.gradle.kts"
+      - "gradle.properties"
+      - "gradlew"
+      - "scripts/configure-firebase.ps1"
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Compile and test (not an installable upgrade)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+      - name: Verify Android SDK in the pinned runner image
+        run: |
+          test -d "$ANDROID_HOME/platforms/android-36"
+          test -x "$ANDROID_HOME/build-tools/36.0.0/aapt"
+          test -x "$ANDROID_HOME/build-tools/36.0.0/apksigner"
+      - name: Compile, test and lint (no APK artifact from this job)
+        env:
+          JAVA_OPTS: "-Duser.language=en -Duser.country=US"
+        run: |
+          chmod +x ./gradlew
+          ./gradlew :app:assembleDebug :app:assembleDebugAndroidTest :app:testDebugUnitTest :app:lintDebug --no-daemon --console=plain
+
+  device-apk:
+    name: Signed Pixel APK (manual, requires private setup)
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - name: Require Firebase client and original signing key
+        env:
+          FIREBASE_CLIENT_B64: ${{ secrets.NOTIFY_FIREBASE_CLIENT_JSON_B64 }}
+          DEBUG_KEYSTORE_B64: ${{ secrets.NOTIFY_ANDROID_DEBUG_KEYSTORE_B64 }}
+        run: |
+          if [ -z "$FIREBASE_CLIENT_B64" ] || [ -z "$DEBUG_KEYSTORE_B64" ]; then
+            echo '::error::Set NOTIFY_FIREBASE_CLIENT_JSON_B64 and NOTIFY_ANDROID_DEBUG_KEYSTORE_B64 as repository Actions secrets before requesting an upgradeable Pixel APK.'
+            exit 1
+          fi
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+      - name: Verify Android SDK in the pinned runner image
+        run: |
+          test -d "$ANDROID_HOME/platforms/android-36"
+          test -x "$ANDROID_HOME/build-tools/36.0.0/aapt"
+          test -x "$ANDROID_HOME/build-tools/36.0.0/apksigner"
+      - name: Prepare private Firebase resources and matching debug signer
+        env:
+          FIREBASE_CLIENT_B64: ${{ secrets.NOTIFY_FIREBASE_CLIENT_JSON_B64 }}
+          DEBUG_KEYSTORE_B64: ${{ secrets.NOTIFY_ANDROID_DEBUG_KEYSTORE_B64 }}
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p "$HOME/.android"
+          printf '%s' "$DEBUG_KEYSTORE_B64" | base64 --decode > "$HOME/.android/debug.keystore"
+          printf '%s' "$FIREBASE_CLIENT_B64" | base64 --decode > "$RUNNER_TEMP/notify-google-services.json"
+          pwsh -NoProfile -File ./scripts/configure-firebase.ps1 -GoogleServicesJson "$RUNNER_TEMP/notify-google-services.json"
+          test -s app/src/main/res/values/firebase-local.xml
+      - name: Build APK with Firebase client and original signing key
+        env:
+          JAVA_OPTS: "-Duser.language=en -Duser.country=US"
+        run: |
+          chmod +x ./gradlew
+          ./gradlew :app:assembleDebug :app:testDebugUnitTest :app:lintDebug --no-daemon --console=plain
+      - name: Check version and matching certificate before upload
+        run: |
+          set -euo pipefail
+          apk=app/build/outputs/apk/debug/app-debug.apk
+          test -s "$apk"
+          badging=$("$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$apk")
+          case "$badging" in
+            *"package: name='dev.notifyalarm' versionCode='6' versionName='0.6.0-safety-poc'"*) ;;
+            *) echo '::error::Unexpected APK package/version; no artifact uploaded.'; exit 1 ;;
+          esac
+          signer=$("$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --print-certs "$apk" |
+            awk -F': ' '/^Signer #1 certificate SHA-256 digest: / { print $2 }')
+          if [ "$signer" != '79c26a1c9329aa69933eada6c5e13b7718d43ae1da90120de639fe23f10cc9d4' ]; then
+            echo '::error::Signer differs from the existing Pixel APK; no artifact uploaded.'
+            exit 1
+          fi
+          cp "$apk" "$RUNNER_TEMP/notify-alarm-0.6.0-safety-debug.apk"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: notify-alarm-0.6.0-safety-debug-${{ github.sha }}
+          path: ${{ runner.temp }}/notify-alarm-0.6.0-safety-debug.apk
+          if-no-files-found: error
+          retention-days: 7
+      - name: Remove private runner files
+        if: always()
+        run: |
+          rm -f "$RUNNER_TEMP/notify-google-services.json" "$HOME/.android/debug.keystore" \
+            app/src/main/res/values/firebase-local.xml

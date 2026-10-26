@@ -1,0 +1,14 @@
+{
+  "repository": "https://github.com/nickza2026/nick-skills",
+  "commit": "7967e6f7112a97cbf2262ea50665a9ba2739d3ca",
+  "scope": "project",
+  "installed_paths": [
+    "bootstrapping-go-backends",
+    "committing-to-github",
+    "debugging-backend-issues",
+    "deploying-go-to-nortezh",
+    "designing-backend-systems",
+    "initializing-agent-teams",
+    "reviewing-backend-prs"
+  ]
+}

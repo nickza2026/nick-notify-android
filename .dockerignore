@@ -1,0 +1,36 @@
+# Start from an allowlist so new private files cannot silently enter the context.
+**
+!Dockerfile
+!.dockerignore
+!server/
+!server/index.mjs
+!server/api.mjs
+!server/fcm.mjs
+!server/store.mjs
+
+# Defence in depth; these remain excluded even if the allowlist grows later.
+**/.git
+**/.letta
+**/.env
+**/.env.*
+**/node_modules
+**/.data
+**/build
+**/.gradle
+**/.kotlin
+**/artifacts
+**/secrets
+**/*secret*
+**/*credential*
+**/*service-account*
+**/google-services.json
+**/firebase-local.xml
+**/*.pem
+**/*.key
+**/*.p12
+**/*.pfx
+**/*.jks
+**/*.keystore
+**/test
+**/tests
+**/docs

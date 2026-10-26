@@ -1,0 +1,122 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: notify-alarm
+  namespace: notify-alarm
+  labels:
+    app.kubernetes.io/name: notify-alarm
+spec:
+  # File-backed state is single-process. No HPA and no rolling overlap.
+  replicas: 1
+  strategy:
+    type: Recreate
+  revisionHistoryLimit: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: notify-alarm
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: notify-alarm
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: api
+          # Replace via kubectl set image --local before applying (see docs).
+          image: notify-alarm-api:0.4.0-poc
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8787
+          env:
+            - name: NODE_ENV
+              value: production
+            - name: HOST
+              value: 0.0.0.0
+            - name: PORT
+              value: "8787"
+            - name: ALERT_STATE_PATH
+              value: /data/idempotency.json
+            - name: ACK_PUBLIC_BASE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: notify-alarm-config
+                  key: ACK_PUBLIC_BASE_URL
+                  optional: true
+            - name: GOOGLE_APPLICATION_CREDENTIALS
+              value: /var/run/secrets/fcm/service-account.json
+            - name: ALERT_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: notify-alarm-secrets
+                  key: ALERT_API_KEY
+            - name: FCM_DEVICE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: notify-alarm-secrets
+                  key: FCM_DEVICE_TOKEN
+          resources:
+            requests:
+              cpu: 100m
+              memory: 96Mi
+            limits:
+              cpu: "1"
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: state
+              mountPath: /data
+            - name: fcm-credentials
+              mountPath: /var/run/secrets/fcm
+              readOnly: true
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 12
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          # /health HTTP 200 alone is not readiness: inspect the config flag.
+          # This does NOT call OAuth/FCM or prove delivery to the Pixel.
+          readinessProbe:
+            exec:
+              command:
+                - node
+                - --input-type=module
+                - -e
+                - "try { const r = await fetch('http://127.0.0.1:8787/health', {signal: AbortSignal.timeout(2000)}); const j = await r.json(); process.exit(r.ok && j.ready === true ? 0 : 1); } catch { process.exit(1); }"
+            periodSeconds: 10
+            timeoutSeconds: 4
+            failureThreshold: 3
+      volumes:
+        - name: state
+          persistentVolumeClaim:
+            claimName: notify-alarm-state
+        - name: fcm-credentials
+          secret:
+            secretName: notify-alarm-secrets
+            defaultMode: 0440
+            items:
+              - key: service-account.json
+                path: service-account.json

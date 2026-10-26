@@ -1,0 +1,9 @@
+{
+  "name": "notify-firestore-emulator-tooling",
+  "private": true,
+  "version": "0.1.0",
+  "dependencies": {
+    "firebase-tools": "15.34.0"
+  },
+  "packageManager": "pnpm@10.33.0"
+}

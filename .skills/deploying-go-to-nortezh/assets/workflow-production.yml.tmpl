@@ -1,0 +1,17 @@
+name: Deliver __APP__ to production
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  deliver:
+    if: github.event.release.prerelease == false
+    uses: ./.github/workflows/deliver-go.yml
+    with:
+      app: __APP__
+      environment: production

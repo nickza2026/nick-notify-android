@@ -1,0 +1,64 @@
+{
+  "schemaVersion": 1,
+  "harness": "letta",
+  "preset": "balanced",
+  "models": {
+    "scout": "gpt-6-luna-low",
+    "implementer": "inherit",
+    "verifier": "gpt-6-sol-high",
+    "advisor": "gpt-6-astra-high",
+    "git-publisher": "inherit",
+    "db-reviewer": "gpt-6-astra-high",
+    "security-reviewer": "gpt-6-astra-high"
+  },
+  "policy": {
+    "maxParallel": 2,
+    "maxDelegationDepth": 1,
+    "writerOwnership": "one-per-file",
+    "publication": "explicit-task-authorization"
+  },
+  "permissionCaveat": "read-role tool allowlist; verify names against installed toolset",
+  "source": {
+    "kind": "github",
+    "repository": "nickza2026/nick-skills",
+    "ref": "7967e6f7112a97cbf2262ea50665a9ba2739d3ca",
+    "baseUrl": "https://raw.githubusercontent.com/nickza2026/nick-skills/7967e6f7112a97cbf2262ea50665a9ba2739d3ca"
+  },
+  "remoteAvailability": "not-checked",
+  "rendererSnapshotMatch": "not-checked",
+  "nativeVerification": "pending",
+  "managedFiles": [
+    {
+      "path": ".letta/agents/nick-scout.md",
+      "contentHash": "fdd0d7a3e59b898b1134834ca1bc89e9f894ae5d7631547a6e051fa5de5c9d37"
+    },
+    {
+      "path": ".letta/agents/nick-implementer.md",
+      "contentHash": "92011637a4b47a6d8b830c5dfa064c8cfea88c389f1a96ed4f96638e62887be3"
+    },
+    {
+      "path": ".letta/agents/nick-verifier.md",
+      "contentHash": "cb86b4a267595139cfd1d4d74b2d2cad81c9eacadfc10722c0aee8ac2812a20e"
+    },
+    {
+      "path": ".letta/agents/nick-advisor.md",
+      "contentHash": "17c550b139fcfd8d77e1191ed989076112d7660653fbcd9e012371976bef1ad9"
+    },
+    {
+      "path": ".letta/agents/nick-git-publisher.md",
+      "contentHash": "08537aaee3d97540ec0bae53cf37da1f095d161a2220a469a4014162a06190c5"
+    },
+    {
+      "path": ".letta/agents/nick-db-reviewer.md",
+      "contentHash": "8efe5c5a4c1e8b71e996fc3c85f5995303914d5c8eaf88a0532688e85796d2f3"
+    },
+    {
+      "path": ".letta/agents/nick-security-reviewer.md",
+      "contentHash": "9318b664846a4d4da0f75abc5f78d3a9d05e928ee425bbbec3fdb35021166e4f"
+    },
+    {
+      "path": "AGENTS.md",
+      "contentHash": "271ca66ff75627912e57acf8d6b90118d5d0af31992cad34c2826f78eea61074"
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: notify-alarm
+  namespace: notify-alarm
+  labels:
+    app.kubernetes.io/name: notify-alarm
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: notify-alarm
+  ports:
+    - name: http
+      port: 8787
+      targetPort: http
+      protocol: TCP

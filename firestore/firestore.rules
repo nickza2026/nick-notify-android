@@ -1,0 +1,10 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Browsers/Android must use the authenticated Go API, never direct database access.
+    // Server SDKs use IAM and bypass these rules; grant their service account least privilege.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

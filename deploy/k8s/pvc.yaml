@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: notify-alarm-state
+  namespace: notify-alarm
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+  # Omitted storageClassName uses the cluster's default dynamic provisioner.
+  # Set it explicitly if the cluster has no default; do not use emptyDir here.

@@ -1,0 +1,113 @@
+# PostgreSQL example only, not included in the legacy Node kustomization. Nothing is deployed automatically.
+# DATABASE_URL is provided by the operator as a Secret, with TLS and startup migration permissions.
+# The external PostgreSQL owns persistence/backups; no embedded DB or database PVC belongs in this API pod.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: notify-alarm-go
+  namespace: notify-alarm
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: notify-alarm-go
+  template:
+    metadata:
+      labels:
+        app: notify-alarm-go
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: api
+          image: your-registry.example/notify-alarm-go:replace-before-deploy
+          ports:
+            - name: http
+              containerPort: 8787
+          env:
+            - name: HOST
+              value: 0.0.0.0
+            - name: PORT
+              value: "8787"
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: notify-alarm-go-secrets
+                  key: DATABASE_URL
+            - name: ALERT_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: notify-alarm-go-secrets
+                  key: ALERT_API_KEY
+            - name: FCM_DEVICE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: notify-alarm-go-secrets
+                  key: FCM_DEVICE_TOKEN
+                  optional: true
+            - name: GOOGLE_APPLICATION_CREDENTIALS
+              value: /var/run/secrets/fcm/service-account.json
+            - name: ACK_PUBLIC_BASE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: notify-alarm-config
+                  key: ACK_PUBLIC_BASE_URL
+                  optional: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 64Mi
+            limits:
+              cpu: "1"
+              memory: 256Mi
+          volumeMounts:
+            - name: fcm
+              mountPath: /var/run/secrets/fcm
+              readOnly: true
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            failureThreshold: 30
+            periodSeconds: 2
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 30
+      volumes:
+        - name: fcm
+          secret:
+            secretName: notify-alarm-go-secrets
+            optional: true
+            items:
+              - key: service-account.json
+                path: service-account.json
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: notify-alarm-go
+  namespace: notify-alarm
+spec:
+  type: ClusterIP
+  selector:
+    app: notify-alarm-go
+  ports:
+    - name: http
+      port: 8787
+      targetPort: http
