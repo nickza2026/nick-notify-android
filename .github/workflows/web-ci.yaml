@@ -1,4 +1,4 @@
-name: Build Backoffice Staging
+name: Validate Notify Web
 
 on:
   workflow_dispatch:
@@ -6,14 +6,20 @@ on:
     branches:
       - main
     paths:
-      - ".github/workflows/web-staging.yaml"
+      - ".github/workflows/web-ci.yaml"
+      - "dashboard/**"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/web-ci.yaml"
       - "dashboard/**"
 
 permissions:
   contents: read
 
 concurrency:
-  group: backoffice-staging-${{ github.ref }}
+  group: notify-web-ci-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -25,6 +31,8 @@ jobs:
         working-directory: dashboard
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: pnpm/action-setup@v4
         with:
           version: 10.33.0
@@ -48,6 +56,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
       - name: Build container image
