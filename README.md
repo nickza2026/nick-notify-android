@@ -6,6 +6,7 @@
 - [API สำหรับ service อื่นส่งแจ้งเตือน](docs/service-integration-th.md)
 - [ระดับ normal เงียบ / critical ปลุก และการตรวจรับบน Pixel](docs/notification-importance-th.md)
 - [Build backoffice ด้วย Docker / GitHub Actions](docs/backoffice-build-th.md)
+- [เตรียม Go API สำหรับ GHCR → Nortezh (ยังไม่เปิด deploy)](docs/nortezh-go-delivery-th.md)
 - `backend/`: Go API + PostgreSQL ที่ผู้ใช้จัดหา; local integration tests ใช้ embedded PostgreSQL จริงและไม่ส่ง FCM จริง
 - `dashboard/`: Next.js ภาษาไทยแบบอ่านอย่างเดียว เวลา Asia/Bangkok, API key อยู่ฝั่ง server เท่านั้น
 - Go runtime production ใช้ `DATABASE_URL` ของ PostgreSQL ภายนอกและรัน SQL auto-migrate ก่อนเปิด API; ไม่ใช้ embedded demo เป็น production ไม่เชื่อมฐานข้อมูลจริง/deploy เองก่อนผู้ใช้ตั้งค่าและอนุมัติ

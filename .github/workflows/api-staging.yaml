@@ -1,4 +1,5 @@
-# Build-only until the Notify API's registry and deployment target are approved.
+# Build-only until the Notify API's registry and Nortezh target are approved.
+# The Nortezh reusable workflow has no active caller; its callers are .example files.
 name: Validate Notify Go API
 
 on:
@@ -8,6 +9,7 @@ on:
       - main
     paths:
       - ".github/workflows/api-staging.yaml"
+      - ".github/workflows/deliver-notify-api-nortezh.yml"
       - "backend/**"
       - "Dockerfile.go"
       - "Dockerfile.go.dockerignore"
@@ -35,6 +37,7 @@ jobs:
           key: embedded-postgres-${{ runner.os }}-${{ hashFiles('backend/go.sum') }}
       - name: gofmt
         run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
+      - run: go build ./...
       - run: go vet ./...
       - run: go test ./... -count=1 -timeout=8m
 

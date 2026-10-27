@@ -1,0 +1,16 @@
+# INERT EXAMPLE: only copy to .github/workflows/notify-api-production.yml
+# after production approval rules, release policy and target identity are approved.
+name: Deliver Notify Go API to production
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  deliver:
+    if: github.event.release.prerelease == false
+    uses: ./.github/workflows/deliver-notify-api-nortezh.yml
