@@ -2,18 +2,6 @@ name: Build Android Alarm APK
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
-    paths:
-      - ".github/workflows/android-apk.yaml"
-      - "app/**"
-      - "gradle/**"
-      - "build.gradle.kts"
-      - "settings.gradle.kts"
-      - "gradle.properties"
-      - "gradlew"
-      - "scripts/configure-firebase.ps1"
 
 permissions:
   contents: read

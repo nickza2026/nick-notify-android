@@ -1,12 +1,12 @@
 # สร้าง Android APK ผ่าน GitHub Actions
 
-ไฟล์ workflow คือ `.github/workflows/android-apk.yaml` บน `main` ใน `nickza2026/nick-notify-android` โดย **ไม่ commit APK หรือ Firebase/keystore ลง repository** และไม่ deploy/backend send ข้อความจริง
+ไฟล์ workflow คือ `.github/workflows/android-apk.yaml` บน `main` ใน `nickza2026/nick-notify-android` ใช้ **`workflow_dispatch` เท่านั้น (manual-only)** โดย **ไม่ commit APK หรือ Firebase/keystore ลง repository** และไม่ deploy/backend send ข้อความจริง Signed APK job ยังคงจำกัด `main`; manual บน branch อื่นไม่ทำให้ได้ signed artifact
 
 ## สองทางที่ไม่ควรสับสน
 
 | Trigger | สิ่งที่ทำ | APK สำหรับ Pixel |
 |---|---|---|
-| Push เข้า `main` ที่แก้ Android/Gradle/workflow | compile, JVM tests, lint และสร้าง debug APK ตรวจ build | **ไม่ upload** เพราะ runner สร้าง debug key ใหม่และไม่ได้ใส่ Firebase client; ติดตั้งทับ Pixel เดิมไม่ได้ |
+| Push / PR / tag | **ไม่เริ่ม Android workflow**; ไม่มี automatic compile/test/APK บน `main` | ไม่มี artifact จาก trigger เหล่านี้ |
 | กด **Actions → Build Android Alarm APK → Run workflow** บน `main` | ตรวจ tests ก่อน แล้วใช้ Firebase client + signing key จาก GitHub Actions Secrets สร้าง APK 0.6 ตรวจ certificate/version และ upload artifact | ใช้อัปเดตแอปเดิมได้ **เฉพาะเมื่อ** signing key ตรงกับ APK เดิมและ Android ตรวจรับจริง; ไม่มีการติดตั้งลงมือถือโดย Actions |
 
 งาน manual จะ **fail แบบไม่สร้าง APK artifact** หากยังไม่กำหนด Secrets หรือ signer ผิด โดยตรวจ fingerprint ของ keystore ที่ถอดจาก Secret **ก่อน build** และบังคับ Gradle ใช้ไฟล์นั้นผ่าน `NOTIFY_CI_DEBUG_KEYSTORE` แล้วตรวจลายเซ็น APK ซ้ำก่อน upload จึงไม่ fallback ไปใช้ debug key ที่ runner สร้างเองหรือ APK ที่ไม่มี FCM ห้ามแก้ workflow ให้ข้ามขั้นตรวจ signer เพื่อให้ CI ผ่าน

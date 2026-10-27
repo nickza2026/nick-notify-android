@@ -1,76 +1,78 @@
-# Reusable only: no push, dispatch or release caller is active in this repository.
-# Approve the target/runtime configuration before activating the example callers.
-name: Deliver Notify Go API to Nortezh
+# Called only after the API/Web CI has built and exported this run's tested image.
+name: Deliver Notify API or Web to Nortezh
 
 on:
   workflow_call:
+    inputs:
+      app:
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: nortezh-notify-api-production
+  group: nortezh-notify-${{ inputs.app }}-production
   cancel-in-progress: false
 
 jobs:
-  verify:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          ref: ${{ github.sha }}
-          fetch-depth: 0 # Verify an annotated or lightweight production release tag.
-          persist-credentials: false
-      - name: Validate production build context
-        shell: bash
-        run: |
-          set -euo pipefail
-          test -f backend/cmd/notify-api/main.go
-          test -f backend/migrations/001_init.sql
-          test -f Dockerfile.go
-          test -f Dockerfile.go.dockerignore
-      - name: Bind production source to published release tag
-        shell: bash
-        env:
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
-        run: |
-          set -euo pipefail
-          test -n "$RELEASE_TAG"
-          [[ "$GITHUB_EVENT_NAME" == release ]]
-          [[ "$GITHUB_REF" == "refs/tags/$RELEASE_TAG" ]]
-          [[ "$(git rev-parse --verify "refs/tags/$RELEASE_TAG^{commit}")" == "$GITHUB_SHA" ]]
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
-        with:
-          go-version-file: backend/go.mod
-          cache-dependency-path: backend/go.sum
-      - name: Cache embedded PostgreSQL test binaries
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/notify-alarm/embedded-postgres
-          key: embedded-postgres-${{ runner.os }}-${{ hashFiles('backend/go.sum') }}
-      - name: Build, vet and test with isolated embedded PostgreSQL
-        working-directory: backend
-        shell: bash
-        run: |
-          set -euo pipefail
-          test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
-          go build ./...
-          go vet ./...
-          go test ./... -count=1 -timeout=8m
-
-  approve-target:
-    needs: verify
+  source:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions: {}
-    environment: notify-api-production
+    outputs:
+      environment: ${{ steps.select.outputs.environment }}
+      target: ${{ steps.select.outputs.target }}
+      port: ${{ steps.select.outputs.port }}
+      artifact: ${{ steps.select.outputs.artifact }}
+      archive: ${{ steps.select.outputs.archive }}
+      local_image: ${{ steps.select.outputs.local_image }}
+      image: ${{ steps.select.outputs.image }}
     steps:
-      - name: Require approved existing WebService and configured runtime
+      - name: Bind delivery to a tested main push and known application
+        id: select
         shell: bash
         env:
+          APP: ${{ inputs.app }}
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_EVENT_NAME" == push && "$GITHUB_REF" == refs/heads/main ]]
+          [[ "$GITHUB_SHA" =~ ^[a-f0-9]{40}$ ]]
+          case "$APP" in
+            api)
+              target=notify-alarm-api
+              port=8787
+              artifact="notify-api-image-$GITHUB_SHA"
+              archive=api-image.tar
+              local_image="notify-api:$GITHUB_SHA"
+              ;;
+            web)
+              target=notify-alarm-web
+              port=3010
+              artifact="backoffice-image-$GITHUB_SHA"
+              archive=backoffice-image.tar
+              local_image="notify-backoffice:$GITHUB_SHA"
+              ;;
+            *) exit 1 ;;
+          esac
+          image="ghcr.io/${GITHUB_REPOSITORY,,}/notify-$APP:$GITHUB_SHA-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          printf 'environment=notify-%s-production\ntarget=%s\nport=%s\nartifact=%s\narchive=%s\nlocal_image=%s\nimage=%s\n' \
+            "$APP" "$target" "$port" "$artifact" "$archive" "$local_image" "$image" >> "$GITHUB_OUTPUT"
+
+  approve-target:
+    needs: source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    environment: ${{ needs.source.outputs.environment }}
+    steps:
+      - name: Require prepared target and operator-approved runtime before publication
+        shell: bash
+        env:
+          APP: ${{ inputs.app }}
+          EXPECTED_TARGET: ${{ needs.source.outputs.target }}
+          EXPECTED_PORT: ${{ needs.source.outputs.port }}
           NTZ_PROJECT: ${{ vars.NTZ_PROJECT }}
           NTZ_LOCATION: ${{ vars.NTZ_LOCATION }}
           NTZ_DEPLOYMENT: ${{ vars.NTZ_DEPLOYMENT }}
@@ -78,84 +80,80 @@ jobs:
           NTZ_PORT: ${{ vars.NTZ_PORT }}
           NTZ_EXISTING_TARGET_CONFIRMED: ${{ vars.NTZ_EXISTING_TARGET_CONFIRMED }}
           NTZ_RUNTIME_READY: ${{ vars.NTZ_RUNTIME_READY }}
+          NTZ_WEB_ACCESS_PROTECTED: ${{ vars.NTZ_WEB_ACCESS_PROTECTED }}
           NTZ_SA_EMAIL: ${{ secrets.NTZ_SA_EMAIL }}
           NTZ_SA_KEY: ${{ secrets.NTZ_SA_KEY }}
         run: |
           set -euo pipefail
-          test -n "$NTZ_PROJECT"
-          test -n "$NTZ_LOCATION"
-          test -n "$NTZ_DEPLOYMENT"
           [[ "$NTZ_PROJECT" == internal-tools ]]
           [[ "$NTZ_LOCATION" == olufy-0 ]]
-          [[ "$NTZ_DEPLOYMENT" == notify-alarm-api ]]
-          test -n "$NTZ_SA_EMAIL"
-          test -n "$NTZ_SA_KEY"
+          [[ "$NTZ_DEPLOYMENT" == "$EXPECTED_TARGET" ]]
           [[ "$NTZ_TYPE" == WebService ]]
-          [[ "$NTZ_PORT" == 8787 ]]
+          [[ "$NTZ_PORT" == "$EXPECTED_PORT" ]]
           [[ "$NTZ_EXISTING_TARGET_CONFIRMED" == true ]]
           [[ "$NTZ_RUNTIME_READY" == true ]]
-          echo 'Approved target configuration present; this does not verify runtime health.'
+          test -n "$NTZ_SA_EMAIL"
+          test -n "$NTZ_SA_KEY"
+          if [[ "$APP" == web ]]; then
+            [[ "$NTZ_WEB_ACCESS_PROTECTED" == true ]]
+          fi
+          echo 'Target attestations present; operator verification is still required for runtime health.'
 
   publish:
-    needs: approve-target
+    needs: [source, approve-target]
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 20
     permissions:
       contents: read
       packages: write
     outputs:
-      image: ${{ steps.image.outputs.tag }}
-      digest: ${{ steps.build.outputs.digest }}
+      image: ${{ needs.source.outputs.image }}
+      digest: ${{ steps.push.outputs.digest }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Download only this workflow run's tested image
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
-      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+          name: ${{ needs.source.outputs.artifact }}
+          path: ${{ runner.temp }}/tested-image
       - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Select commit- and run-specific image tag
-        id: image
-        shell: bash
-        run: |
-          set -euo pipefail
-          image="ghcr.io/${GITHUB_REPOSITORY,,}/notify-api"
-          printf 'tag=%s:%s-%s-%s\n' "$image" "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
-      - name: Build and publish the verified revision
-        id: build
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
-        with:
-          context: .
-          file: ./Dockerfile.go
-          platforms: linux/amd64
-          pull: true
-          push: true
-          tags: ${{ steps.image.outputs.tag }}
-          cache-from: type=gha,scope=notify-api-production-amd64
-          cache-to: type=gha,mode=max,scope=notify-api-production-amd64
-      - name: Record published image identity
+      - name: Publish the exact tested image without rebuilding
+        id: push
         shell: bash
         env:
-          IMAGE: ${{ steps.image.outputs.tag }}
-          DIGEST: ${{ steps.build.outputs.digest }}
+          ARTIFACT_DIR: ${{ runner.temp }}/tested-image
+          ARCHIVE: ${{ needs.source.outputs.archive }}
+          LOCAL_IMAGE: ${{ needs.source.outputs.local_image }}
+          IMAGE: ${{ needs.source.outputs.image }}
         run: |
           set -euo pipefail
-          test -n "$DIGEST"
-          printf 'Published %s\nDigest %s\n' "$IMAGE" "$DIGEST" >> "$GITHUB_STEP_SUMMARY"
+          test -s "$ARTIFACT_DIR/$ARCHIVE"
+          docker load --input "$ARTIFACT_DIR/$ARCHIVE"
+          tested_id=$(docker image inspect "$LOCAL_IMAGE" --format '{{.Id}}')
+          docker tag "$LOCAL_IMAGE" "$IMAGE"
+          [[ "$(docker image inspect "$IMAGE" --format '{{.Id}}')" == "$tested_id" ]]
+          docker push "$IMAGE" | tee "$RUNNER_TEMP/notify-push.log"
+          digest=$(sed -n 's/.*digest: \(sha256:[a-f0-9]\{64\}\).*/\1/p' "$RUNNER_TEMP/notify-push.log" | tail -n 1)
+          [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]]
+          printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+          printf 'Published tested image %s\nDigest %s\n' "$IMAGE" "$digest" >> "$GITHUB_STEP_SUMMARY"
 
   deploy:
-    needs: publish
+    needs: [source, publish]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions: {}
-    environment: notify-api-production
+    environment: ${{ needs.source.outputs.environment }}
     steps:
-      - name: Recheck exact approved WebService destination
+      - name: Recheck destination and access protection before creating revision
         shell: bash
         env:
+          APP: ${{ inputs.app }}
+          EXPECTED_TARGET: ${{ needs.source.outputs.target }}
+          EXPECTED_PORT: ${{ needs.source.outputs.port }}
           NTZ_PROJECT: ${{ vars.NTZ_PROJECT }}
           NTZ_LOCATION: ${{ vars.NTZ_LOCATION }}
           NTZ_DEPLOYMENT: ${{ vars.NTZ_DEPLOYMENT }}
@@ -163,19 +161,20 @@ jobs:
           NTZ_PORT: ${{ vars.NTZ_PORT }}
           NTZ_EXISTING_TARGET_CONFIRMED: ${{ vars.NTZ_EXISTING_TARGET_CONFIRMED }}
           NTZ_RUNTIME_READY: ${{ vars.NTZ_RUNTIME_READY }}
+          NTZ_WEB_ACCESS_PROTECTED: ${{ vars.NTZ_WEB_ACCESS_PROTECTED }}
         run: |
           set -euo pipefail
-          test -n "$NTZ_PROJECT"
-          test -n "$NTZ_LOCATION"
-          test -n "$NTZ_DEPLOYMENT"
           [[ "$NTZ_PROJECT" == internal-tools ]]
           [[ "$NTZ_LOCATION" == olufy-0 ]]
-          [[ "$NTZ_DEPLOYMENT" == notify-alarm-api ]]
+          [[ "$NTZ_DEPLOYMENT" == "$EXPECTED_TARGET" ]]
           [[ "$NTZ_TYPE" == WebService ]]
-          [[ "$NTZ_PORT" == 8787 ]]
+          [[ "$NTZ_PORT" == "$EXPECTED_PORT" ]]
           [[ "$NTZ_EXISTING_TARGET_CONFIRMED" == true ]]
           [[ "$NTZ_RUNTIME_READY" == true ]]
-      - name: Create revision of the approved target
+          if [[ "$APP" == web ]]; then
+            [[ "$NTZ_WEB_ACCESS_PROTECTED" == true ]]
+          fi
+      - name: Create revision with the exact published image tag
         uses: Nortezh/nortezh-action@ec5808f79fa5cfc74514e8631a0013315a79475f # v1.0.5
         with:
           action: deployment.create-revision
