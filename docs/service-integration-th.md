@@ -133,6 +133,6 @@ Alarm หยุดในเครื่องเมื่อคนกดรั�
 - การทดสอบฐานจริงอาจสร้าง schema และเขียนข้อมูล จึงต้องเลือก database/schema สำหรับระบบนี้และอนุมัติก่อนเชื่อม ไม่ใช้ฐานงานอื่นโดยเดาเอง
 - embedded PostgreSQL ใช้เฉพาะ tests/demo; production persistence/backup อยู่ที่ PostgreSQL ภายนอก ไม่อยู่ใน API pod และไม่ต้องมี embedded binary ใน image
 - ตั้ง FCM credential/token และ HTTPS `ACK_PUBLIC_BASE_URL` หลังทดสอบ local ผ่าน แล้วตรวจจริงหนึ่ง incident / หนึ่ง human Ack / retry เดิม พร้อมเทียบประวัติ ไม่เปิด production dashboard ภายนอกโดยยังไม่มี authentication
-- `.github/workflows/api-staging.yaml` ทดสอบ Go แล้ว build `Dockerfile.go` จาก repository root ด้วย `Dockerfile.go.dockerignore` เท่านั้น **ไม่ push GHCR และไม่ deploy**; ยังไม่ได้ทดสอบ GitHub Actions/Linux Docker engine จริง ห้ามตีความการมี workflow ว่ามี production URL แล้ว
+- `.github/workflows/api-ci.yaml` ใช้ push เข้า `main` เป็น build หลัก, ตรวจ PR เข้า `main` และเลือก manual run ได้ โดย push/PR กรอง Go/workflow/Docker paths ทดสอบ Go แล้ว build `Dockerfile.go` จาก repository root ด้วย `Dockerfile.go.dockerignore` เท่านั้น **ไม่ push GHCR และไม่ deploy** ไม่มี staging deployment; ผล build-only รุ่นก่อนผ่านบน GitHub แต่ workflow ที่เปลี่ยนชื่อนี้ยังไม่ได้รัน ห้ามตีความการมี workflow ว่ามี production URL แล้ว
 
 รายละเอียด UI/เวลา/การนับดู [dashboard PostgreSQL](dashboard-local-th.md) ส่วน Node bridge เดิมยังเป็น baseline แยก ไม่มีการย้ายประวัติหรือเปลี่ยน service จริงโดยอัตโนมัติ

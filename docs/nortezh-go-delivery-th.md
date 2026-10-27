@@ -1,17 +1,25 @@
 # เตรียม Go API สำหรับ GHCR → Nortezh (ยังไม่เผยแพร่หรือ deploy)
 
-เอกสารนี้เป็น **handoff แบบ production-only ตามคำขอผู้ใช้** ไม่มี staging delivery ไม่ใช่รายงานว่า Go API มี URL ใช้งานแล้ว ปัจจุบัน `.github/workflows/api-staging.yaml` เป็นเพียงชื่อไฟล์ CI เดิมที่ test + build Docker image โดย `push: false`; **ไม่ใช่ staging deployment** มันไม่เขียน GHCR, ไม่สร้าง revision บน Nortezh และไม่แตะฐานข้อมูลภายนอก
+เอกสารนี้เป็น **handoff แบบ production-only ตามคำขอผู้ใช้** ไม่มี staging delivery ไม่ใช่รายงานว่า Go API มี URL ใช้งานแล้ว `.github/workflows/api-ci.yaml` และ `web-ci.yaml` ใช้ `main` เป็น build หลักและตรวจ PR เข้า `main` โดย test + build Docker image ด้วย `push: false`; ไม่เขียน GHCR, ไม่สร้าง revision บน Nortezh และไม่แตะฐานข้อมูลภายนอก
 
 ## ไฟล์และขอบเขต
 
 | ไฟล์ | สถานะ/หน้าที่ |
 |---|---|
 | `Dockerfile.go` + `Dockerfile.go.dockerignore` | ใช้ root Docker context แบบ allowlist แต่ Go module จริงอยู่ `backend/`; build `backend/cmd/notify-api`, binary Linux/amd64, runtime distroless UID 65532, `HOST=0.0.0.0`, `PORT=8787` |
-| `.github/workflows/api-staging.yaml` | CI ที่ทำงานอยู่: gofmt, build, vet, tests กับ embedded PostgreSQL, Docker Buildx **ไม่ push** |
+| `.github/workflows/api-ci.yaml` | CI: gofmt, build, vet, tests กับ embedded PostgreSQL, Docker Buildx **ไม่ push**; รันอัตโนมัติเมื่อ push เข้า `main` หรือเปิด/อัปเดต PR เข้า `main` ที่เปลี่ยนไฟล์ Go/workflow/Docker ที่เกี่ยวข้อง และยังเลือก manual run ได้ |
 | `.github/workflows/deliver-notify-api-nortezh.yml` | reusable `workflow_call` เท่านั้น: verify → approve-target → publish GHCR → deploy Nortezh; **ยังไม่มี active caller** จึงไม่ทำงานเพราะ push/release หรือกด Run workflow ตรง ๆ |
 | `deploy/nortezh/notify-api-production.yml.example` | **ตัวอย่างเฉย ๆ**; หากอนุมัติให้ย้ายเป็น `.github/workflows/notify-api-production.yml` จึงเริ่มจาก release `published` ที่ไม่ใช่ prerelease ไม่มี push-main deploy |
 
 ชื่อ Go app คือ `notify-api` (ไม่ใช่ชื่อ app `user/admin` ของ source skill); ผู้ใช้ยืนยัน Nortezh **project ID `internal-tools` / location `olufy-0`** และเลือกชื่อ deployment ใหม่ว่า **`notify-alarm-api`** ให้ตรงงานนี้ ค่า ID/location มาจากผู้ใช้ ยังไม่ได้ตรวจใน Nortezh จริง และชื่อใหม่คือแผน ไม่ใช่หลักฐานว่ามี target บน Nortezh แล้ว เลือก **WebService** และพอร์ต **8787** ไม่ใช่ Worker หรือพอร์ต default 80 ไม่มี Swagger generator ที่ต้องเรียกใน build: migration `backend/migrations/001_init.sql` ฝังใน binary ด้วย `go:embed` อยู่แล้ว; ไม่ต้องคัดลอก SQL เข้า runtime image แยกหรือใส่ไฟล์ service-account ใน image
+
+### Automatic CI ไม่ใช่ automatic deploy
+
+- push เข้า `main` เป็น build หลัก ไม่ trigger จาก topic branch หรือ tag; PR ตรวจเฉพาะ base `main` ผ่าน event `pull_request` ปกติ ไม่ใช่ `pull_request_target` และไม่รับ production secrets workflow มีเพียง `contents: read` และ checkout ไม่เก็บ Git credentials ไว้ให้โค้ดที่ทดสอบ
+- ทั้ง push/PR ของ API กรอง path เดียวกัน: `backend/**` (รวม Go module/migrations), `Dockerfile.go`, `Dockerfile.go.dockerignore`, `.github/workflows/api-ci.yaml` และ `.github/workflows/deliver-notify-api-nortezh.yml` การแก้เฉพาะ Android/dashboard/docs ไม่เริ่ม Go CI ส่วน Web ใช้ `dashboard/**` และ `.github/workflows/web-ci.yaml`
+- PR ตรวจ merge revision ก่อนรวมเข้า `main`; เมื่อ merge แล้ว main build จะตรวจ commit จริงอีกครั้ง ยกเลิกเฉพาะ run เก่าที่มี event/ref เดียวกัน ไม่ยกเลิก production deployment การลบไฟล์ CI ชื่อ staging เดิมไม่ได้ลบประวัติ run บน GitHub
+- Docker build รอ Go tests ผ่านก่อน และคง `push: false`; ไม่มี login GHCR, Nortezh action หรือ environment production ใน CI นี้ การ push branch จึงไม่ publish image หรือ deploy
+- การเปลี่ยน trigger ต้อง commit/push ขึ้น branch ก่อนจึงเริ่มอัตโนมัติได้ ส่วน PR event จาก fork อาจต้องให้ผู้ดูแลอนุมัติ workflow ตาม GitHub policy ไม่ได้ข้ามข้อจำกัดนี้
 
 ## GitHub Environments ก่อนเปิด caller
 

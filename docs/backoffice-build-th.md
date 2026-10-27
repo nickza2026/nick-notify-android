@@ -6,16 +6,16 @@ backoffice ของ notify-android คือโฟลเดอร์ **`dashboa
 
 ไฟล์ที่เกี่ยวข้อง:
 
-- `.github/workflows/web-staging.yaml`: เปลี่ยนเป็น **Build Backoffice Staging**
+- `.github/workflows/web-ci.yaml`: **Validate Notify Web** ไม่มี staging environment
 - `dashboard/Dockerfile`: multi-stage build และ runtime แบบ non-root (`node`)
 - `dashboard/.dockerignore`: allowlist สำหรับ context `dashboard/` เท่านั้น
 - `dashboard/next.config.ts`: `output: 'standalone'` เพื่อลด runtime dependencies
 
-ไม่แก้ workflow API ในงานนี้ และไม่สรุปว่า template API พร้อมใช้เพราะ backoffice build ผ่าน
+API มี CI แยกที่ `.github/workflows/api-ci.yaml` และไม่สรุปว่า API พร้อมใช้เพราะ backoffice build ผ่าน
 
 ## 2. Pipeline และผลลัพธ์
 
-Trigger: กด `workflow_dispatch` หรือ push เข้า `main` ที่แก้ `dashboard/**` / workflow นี้
+Trigger: push เข้า `main` เป็น build หลัก, เปิด/อัปเดต `pull_request` ที่มี base เป็น `main`, หรือกด `workflow_dispatch` โดย push/PR กรองการแก้ `dashboard/**` / `.github/workflows/web-ci.yaml` ไม่รันจาก push topic branch โดยตรงหรือ tag และไม่สร้าง staging deployment PR จาก fork อาจต้องให้ผู้ดูแลอนุมัติตาม GitHub policy
 
 1. Checkout → ติดตั้ง pnpm/Node ตาม version ที่ระบุ
 2. `pnpm install --frozen-lockfile`
