@@ -6,16 +6,16 @@
 
 | Workflow | หน้าที่ |
 |---|---|
-| `.github/workflows/api-ci.yaml` | push `main` / PR base `main` ตาม Go/Docker/workflow paths และ manual: gofmt/build/vet/tests กับ embedded PostgreSQL → dockerize → artifact; เฉพาะ push `main` เรียก delivery ด้วย `app: api` |
-| `.github/workflows/web-ci.yaml` | push `main` / PR base `main` ตาม dashboard/workflow paths และ manual: frozen install/typegen/typecheck/tests/build → dockerize/smoke → artifact; เฉพาะ push `main` เรียก delivery ด้วย `app: web` |
+| `.github/workflows/api-ci.yaml` | push `main` ตาม Go/Docker/workflow paths และ manual: gofmt/build/vet/tests กับ embedded PostgreSQL → dockerize → artifact; เฉพาะ push `main` เรียก delivery ด้วย `app: api`; ไม่รันจาก PR |
+| `.github/workflows/web-ci.yaml` | push `main` ตาม dashboard/workflow paths และ manual: frozen install/typegen/typecheck/tests/build → dockerize/smoke → artifact; เฉพาะ push `main` เรียก delivery ด้วย `app: web`; ไม่รันจาก PR |
 | `.github/workflows/deliver-notify-api-nortezh.yml` | reusable `workflow_call`: source guard → protected environment/target preflight → publish tested image → deploy exact tag |
 | `.github/workflows/android-apk.yaml` | `workflow_dispatch` เท่านั้น ไม่มี automatic Android compile บน push `main`; signed APK job เฉพาะ `main` และคง signer validation ตาม [คู่มือ APK](github-apk-build-th.md) |
 
-PR/manual แม้เลือก `main` **ไม่ publish/deploy** ไม่มี release/tag trigger; release-production `.example` เดิมถูกถอด ไม่ต้องย้าย template เข้า workflows อีก ไม่ใช้ topic branch push หรือ `pull_request_target` เพื่อ delivery
+ถอด PR trigger ทั้ง API/Web เพื่อประหยัด runner: เปิด/อัปเดต PR ไม่เริ่ม tests/build เลย แต่ยังตรวจ tests ก่อน deploy เมื่อ push `main` ส่วน manual แม้เลือก `main` **ไม่ publish/deploy** ไม่มี release/tag trigger; release-production `.example` เดิมถูกถอด ไม่ต้องย้าย template เข้า workflows อีก ไม่ใช้ topic branch push หรือ `pull_request_target` เพื่อ delivery
 
-API push/PR path filters ครอบคลุม `backend/**`, `Dockerfile.go`, `Dockerfile.go.dockerignore` และ API/shared delivery workflows; Web ครอบคลุม `dashboard/**` และ Web/shared delivery workflows ทั้งคู่รวม `tools/test-delivery-workflows.mjs` เพื่อให้การแก้ safety checks ถูกทดสอบ การแก้เฉพาะ docs ไม่เริ่ม deploy
+API push path filters ครอบคลุม `backend/**`, `Dockerfile.go`, `Dockerfile.go.dockerignore` และ API/shared delivery workflows; Web ครอบคลุม `dashboard/**` และ Web/shared delivery workflows ทั้งคู่รวม `tools/test-delivery-workflows.mjs` เพื่อให้การแก้ safety checks ถูกทดสอบ การแก้เฉพาะ docs ไม่เริ่ม deploy
 
-Caller ใช้ `needs: dockerize` และ guard `github.event_name == 'push' && github.ref == 'refs/heads/main'` ทั้งสอง app ส่วน reusable ตรวจ main-push source ซ้ำและรับเฉพาะ `app: api`/`web` ก่อนเลือก environment **concurrency ต้องไม่ cancel in-flight main deployments** เมื่อมี push ใหม่ PR เก่าอาจยกเลิกตาม CI policy
+Caller ใช้ `needs: dockerize` และ guard `github.event_name == 'push' && github.ref == 'refs/heads/main'` ทั้งสอง app ส่วน reusable ตรวจ main-push source ซ้ำและรับเฉพาะ `app: api`/`web` ก่อนเลือก environment **concurrency ต้องไม่ cancel in-flight main deployments** เมื่อมี push ใหม่ การรันมือที่ซ้ำกันยังยกเลิก run เก่าได้ ถ้า branch protection เดิมบังคับ PR status checks ที่ถูกถอด trigger นี้ ผู้ดูแลต้องปรับ required checks ให้สอดคล้อง มิฉะนั้น PR อาจรอ check ที่จะไม่รัน งานนี้ไม่แก้ branch protection บน GitHub เอง
 
 ## 2. ส่ง image เดียวกับที่ทดสอบ ไม่ rebuild
 

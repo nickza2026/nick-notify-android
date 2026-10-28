@@ -27,10 +27,12 @@ test('APK is manual-only; original signer/Firebase validation remains separate',
 });
 
 for (const app of ['api', 'web']) {
-  test(`${app}: main build then delivery, PR/manual remain uncredentialed build-only`, () => {
+  test(`${app}: main build then delivery, no PR runs, manual remains build-only`, () => {
     const text = read(`${app}-ci.yaml`);
     assert.match(section(text, 'on'), /push:\s+branches:\s+- main/);
-    assert.match(section(text, 'on'), /pull_request:\s+branches:\s+- main/);
+    assert.doesNotMatch(section(text, 'on'), /^  pull_request(?:_target)?:/m);
+    assert.deepEqual([...section(text, 'on').matchAll(/^  ([a-z_]+):/gm)]
+      .map(match => match[1]).sort(), ['push', 'workflow_dispatch']);
     assert.match(section(text, 'on'), /workflow_dispatch:/);
     assert.match(section(text, 'permissions'), /^  contents: read/m);
     assert.doesNotMatch(section(text, 'permissions'), /packages: write/);
@@ -203,4 +205,16 @@ test('every API/Web/delivery/APK run step has valid Bash syntax (not executed)',
     }
   }
   assert.ok(checked >= 20, `expected all scripts, checked ${checked}`);
+});
+
+test('Node application images and Web CI use the verified Node 22 security patch', () => {
+  const version = '22.23.4';
+  const base = `node:${version}-bookworm-slim`;
+  for (const [path, expectedStages] of [['Dockerfile', 1], ['dashboard/Dockerfile', 2]]) {
+    const text = readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
+    const from = [...text.matchAll(/^FROM\s+(\S+)/gm)].map(match => match[1]);
+    assert.equal(from.length, expectedStages);
+    assert.deepEqual(from, Array(expectedStages).fill(base), `${path}: all stages must use the security patch`);
+  }
+  assert.ok(read('web-ci.yaml').includes(`node-version: ${version}`));
 });

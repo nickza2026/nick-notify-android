@@ -10,14 +10,6 @@ on:
       - ".github/workflows/deliver-notify-api-nortezh.yml"
       - "dashboard/**"
       - "tools/test-delivery-workflows.mjs"
-  pull_request:
-    branches:
-      - main
-    paths:
-      - ".github/workflows/web-ci.yaml"
-      - ".github/workflows/deliver-notify-api-nortezh.yml"
-      - "dashboard/**"
-      - "tools/test-delivery-workflows.mjs"
 
 permissions:
   contents: read
@@ -45,7 +37,7 @@ jobs:
           version: 10.33.0
       - uses: actions/setup-node@v4
         with:
-          node-version: 22.19.0
+          node-version: 22.23.4
           cache: pnpm
           cache-dependency-path: dashboard/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile

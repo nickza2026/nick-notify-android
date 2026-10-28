@@ -1,19 +1,9 @@
-# PR/manual: build only. Main push: deliver the tested image after runtime gates.
+# No PR runs. Manual: build only. Main push: deliver after tests/runtime gates.
 name: Build and Deliver Notify Go API
 
 on:
   workflow_dispatch:
   push:
-    branches:
-      - main
-    paths:
-      - ".github/workflows/api-ci.yaml"
-      - ".github/workflows/deliver-notify-api-nortezh.yml"
-      - "backend/**"
-      - "Dockerfile.go"
-      - "Dockerfile.go.dockerignore"
-      - "tools/test-delivery-workflows.mjs"
-  pull_request:
     branches:
       - main
     paths:
