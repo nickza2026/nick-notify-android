@@ -4,7 +4,7 @@
 
 รัน API bridge ปัจจุบันบน Docker และ Kubernetes ได้โดยไม่เปลี่ยนสัญญา API แต่ **ยังเป็น PoC แบบ single process/เครื่องรับหนึ่งเครื่อง** ดู schema จริงใน [server README](../server/README.md) ไม่ใช่ full API ในเอกสารสถาปัตยกรรม
 
-- Container ใช้ `node:22.19.0-bookworm-slim` ให้ตรง Node 22 ที่ทดสอบ ไม่มี npm dependency จึงไม่ต้อง `npm install`
+- Container ใช้ `node:22.23.4-bookworm-slim` ตาม [Node.js security release 21 ต.ค. 2026](https://nodejs.org/en/blog/vulnerability/october-2026-security-releases) คง major 22 ไม่มี npm dependency จึงไม่ต้อง `npm install` การอัปเดต source pin ไม่ได้อัปเดต image ที่ deploy อยู่แล้ว ต้อง build/scan/rollout ใหม่แยกกัน
 - Pin นี้ไม่ใช่การรับรองว่าปลอดช่องโหว่หรือใหม่ล่าสุด ต้อง scan image และปรับ patch/digest ที่ยืนยันจริงก่อน production ไม่ใส่ digest ที่เดาเอง
 - รันเป็น UID/GID `1000:1000` ไม่ใช่ root, source เป็น read-only, เขียน idempotency เฉพาะ `/data`
 - ตั้ง `HOST=0.0.0.0` ใน container โดยชัดเจน เพราะ default ของ server คือ `127.0.0.1` และจะรับผ่าน Service ไม่ได้หากไม่เปลี่ยน

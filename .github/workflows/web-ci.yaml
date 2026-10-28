@@ -1,4 +1,4 @@
-name: Validate Notify Web
+name: Build and Deliver Notify Web
 
 on:
   workflow_dispatch:
@@ -7,20 +7,16 @@ on:
       - main
     paths:
       - ".github/workflows/web-ci.yaml"
+      - ".github/workflows/deliver-notify-api-nortezh.yml"
       - "dashboard/**"
-  pull_request:
-    branches:
-      - main
-    paths:
-      - ".github/workflows/web-ci.yaml"
-      - "dashboard/**"
+      - "tools/test-delivery-workflows.mjs"
 
 permissions:
   contents: read
 
 concurrency:
   group: notify-web-ci-${{ github.event_name }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name != 'push' || github.ref != 'refs/heads/main' }}
 
 jobs:
   test:
@@ -33,12 +29,15 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+      - name: Test delivery workflow safety
+        working-directory: .
+        run: node --test tools/test-delivery-workflows.mjs
       - uses: pnpm/action-setup@v4
         with:
           version: 10.33.0
       - uses: actions/setup-node@v4
         with:
-          node-version: 22.19.0
+          node-version: 22.23.4
           cache: pnpm
           cache-dependency-path: dashboard/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
@@ -105,5 +104,16 @@ jobs:
         with:
           name: backoffice-image-${{ github.sha }}
           path: ${{ runner.temp }}/backoffice-image.tar
+          overwrite: true
           retention-days: 3
           compression-level: 0
+
+  deliver:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: dockerize
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/deliver-notify-api-nortezh.yml
+    with:
+      app: web

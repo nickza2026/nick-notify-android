@@ -6,12 +6,12 @@
 - [API สำหรับ service อื่นส่งแจ้งเตือน](docs/service-integration-th.md)
 - [ระดับ normal เงียบ / critical ปลุก และการตรวจรับบน Pixel](docs/notification-importance-th.md)
 - [Build backoffice ด้วย Docker / GitHub Actions](docs/backoffice-build-th.md)
-- [เตรียม Go API สำหรับ GHCR → Nortezh (ยังไม่เปิด deploy)](docs/nortezh-go-delivery-th.md)
+- [API + Web: main → GHCR → Nortezh และสิ่งที่ผู้ดูแลต้องเตรียม](docs/nortezh-go-delivery-th.md)
 - `backend/`: Go API + PostgreSQL ที่ผู้ใช้จัดหา; local integration tests ใช้ embedded PostgreSQL จริงและไม่ส่ง FCM จริง
 - `dashboard/`: Next.js ภาษาไทยแบบอ่านอย่างเดียว เวลา Asia/Bangkok, API key อยู่ฝั่ง server เท่านั้น
 - Go runtime production ใช้ `DATABASE_URL` ของ PostgreSQL ภายนอกและรัน SQL auto-migrate ก่อนเปิด API; ไม่ใช้ embedded demo เป็น production ไม่เชื่อมฐานข้อมูลจริง/deploy เองก่อนผู้ใช้ตั้งค่าและอนุมัติ
-- Node `server/` และ Docker/K8s เดิมยังเก็บเป็น baseline ไม่ย้ายข้อมูลย้อนหลัง/ไม่หยุดบริการเดิมเอง; Go image ใช้ `Dockerfile.go` และ manifest ตัวอย่างแยก ส่วน `.github/workflows/api-ci.yaml` และ `web-ci.yaml` ใช้ `main` เป็น build หลัก ตรวจ PR เข้า `main` และเลือก manual run ได้ตาม path ที่เกี่ยวข้อง ไม่มี staging และไม่ push image/deploy
-- GitHub Actions สร้าง Android APK จาก `main` แบบแยก **compile/test อัตโนมัติ** กับ **APK ใช้ติดตั้งทับ Pixel ได้เมื่อผู้ใช้ตั้ง Firebase client และ signing keystore เป็น repo Secrets แล้วกด manual run**: [คู่มือ GitHub APK](docs/github-apk-build-th.md) ไม่มี binary/secret ใน Git history
+- Node `server/` และ Docker/K8s เดิมยังเก็บเป็น baseline ไม่ย้ายข้อมูลย้อนหลัง/ไม่หยุดบริการเดิมเอง; `.github/workflows/api-ci.yaml` และ `web-ci.yaml` ตรวจ tests/build ตาม path filters แล้ว **push `main` เท่านั้นจึงส่ง image ที่ทดสอบแล้วไป GHCR → Nortezh อัตโนมัติผ่าน protected environment** ไม่มี staging; ไม่รันตอนเปิด/อัปเดต PR เพื่อประหยัด runner ส่วน manual run เป็น build-only ไม่ publish/deploy ดู preflight/runtime ในคู่มือ delivery ก่อนเปิดใช้งาน
+- GitHub Actions Android เป็น **manual-only (`workflow_dispatch`)** ไม่มี compile/test อัตโนมัติบน push `main`; APK ติดตั้งทับ Pixel ได้เมื่อผู้ใช้ตั้ง Firebase client และ signing keystore เป็น repo Secrets แล้วกด manual run บน `main`: [คู่มือ GitHub APK](docs/github-apk-build-th.md) ไม่มี binary/secret ใน Git history
 - ข้อมูลสาธิตต้องมีแถบ “ไม่ใช่ประวัติการส่งจริง” เสมอ และ provider acceptance ไม่ใช่หลักฐานว่าเครื่องได้รับ/ส่งเสียง
 - Firestore เปลี่ยนเป็น baseline รุ่นก่อน ไม่ใช่ runtime ปัจจุบัน เก็บ source backup แยกและไม่ย้ายข้อมูลจริงอัตโนมัติ
 

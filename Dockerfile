@@ -1,6 +1,6 @@
 # Match the tested Node 22 runtime. Refresh this pin after a vulnerability scan;
 # a version pin is reproducible, not a claim that the base has no vulnerabilities.
-FROM node:22.19.0-bookworm-slim
+FROM node:22.23.4-bookworm-slim
 
 ENV NODE_ENV=production \
     HOST=0.0.0.0 \

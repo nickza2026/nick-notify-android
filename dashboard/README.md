@@ -1,6 +1,6 @@
 # ประวัติการแจ้งเตือน (เฉพาะ localhost)
 
-Build Docker/CI สำหรับ backoffice อยู่ที่ [คู่มือ build ภาษาไทย](../docs/backoffice-build-th.md): ใช้ `dashboard/Dockerfile`, context `dashboard/`, Next standalone และ `.github/workflows/web-ci.yaml` แบบ build/test/artifact บน `main` และ PR เข้า `main` เท่านั้น (มี manual run ด้วย) ไม่มี staging, registry push/deploy อัตโนมัติ และยังไม่เปิด public access
+Build Docker/CI สำหรับ backoffice อยู่ที่ [คู่มือ build ภาษาไทย](../docs/backoffice-build-th.md): ใช้ `dashboard/Dockerfile`, context `dashboard/`, Next standalone และ `.github/workflows/web-ci.yaml` แบบ test/build/artifact; push `main` ตาม path filters ส่ง image ที่ทดสอบแล้วผ่าน reusable delivery ไป GHCR → Nortezh อัตโนมัติหลัง protected-environment preflight ไม่รันตอนเปิด/อัปเดต PR เพื่อประหยัด runner ส่วน manual เป็น build-only ไม่มี staging และยังไม่ใช่ public-ready UI ต้องตั้ง authenticated ingress/private access แยก โดยไม่ขยาย loopback-Host BFF
 
 แดชบอร์ดอ่านอย่างเดียวสำหรับ API ประวัติการแจ้งเตือน ไม่ส่งแจ้งเตือนหรือบันทึกการแตะรับทราบ ต้องใช้ Node.js และ pnpm; ในโฟลเดอร์ `dashboard` เรียก `pnpm install`, `pnpm dev` และเปิด `http://127.0.0.1:3010` (production: `pnpm build` แล้ว `pnpm start`) เซิร์ฟเวอร์ผูกเฉพาะ 127.0.0.1 ห้ามเปิดให้เครือข่ายภายนอกโดยไม่มีระบบยืนยันตัวตนเพิ่มเติม
 

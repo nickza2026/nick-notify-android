@@ -2,7 +2,9 @@
 
 ## 1. ขอบเขต
 
-backoffice ของ notify-android คือโฟลเดอร์ **`dashboard/`** ไม่ใช่ `frontend/` ในตัวอย่างที่คัดลอกมา ใช้ Node 22.19.0, pnpm 10.33.0 และ `pnpm-lock.yaml` ไม่ใช้ `npm ci`, `package-lock.json` หรือ script lint ที่ไม่มีใน package นี้
+backoffice ของ notify-android คือโฟลเดอร์ **`dashboard/`** ไม่ใช่ `frontend/` ในตัวอย่างที่คัดลอกมา ใช้ Node 22.23.4, pnpm 10.33.0 และ `pnpm-lock.yaml` ไม่ใช้ `npm ci`, `package-lock.json` หรือ script lint ที่ไม่มีใน package นี้
+
+Node pin อัปเดตตาม [security release 21 ต.ค. 2026 ของ Node.js](https://nodejs.org/en/blog/vulnerability/october-2026-security-releases) และ [release index ทางการ](https://nodejs.org/dist/index.json): `22.23.4` เป็น security patch ล่าสุดในสาย 22 ณ วันที่ตรวจ 28 ต.ค. 2026 จึงคง major เดิม ไม่ข้ามไป Node 24/26 โดยอัตโนมัติ ทั้ง Web CI, Docker build/runtime และ Node bridge image ใช้ patch เดียวกัน ไม่เปลี่ยน Node global ของเครื่อง Pin นี้ไม่แทน vulnerability scan ของ Debian/npm dependencies และไม่ใช่หลักฐานว่า image ใหม่ถูก deploy แล้ว
 
 ไฟล์ที่เกี่ยวข้อง:
 
@@ -15,7 +17,7 @@ API มี CI แยกที่ `.github/workflows/api-ci.yaml` และไม
 
 ## 2. Pipeline และผลลัพธ์
 
-Trigger: push เข้า `main` เป็น build หลัก, เปิด/อัปเดต `pull_request` ที่มี base เป็น `main`, หรือกด `workflow_dispatch` โดย push/PR กรองการแก้ `dashboard/**` / `.github/workflows/web-ci.yaml` ไม่รันจาก push topic branch โดยตรงหรือ tag และไม่สร้าง staging deployment PR จาก fork อาจต้องให้ผู้ดูแลอนุมัติตาม GitHub policy
+Trigger: push เข้า `main` เป็น build หลักและส่งต่อ delivery หลัง tests/dockerize ผ่าน หรือกด `workflow_dispatch` โดย push กรองการแก้ `dashboard/**` / `.github/workflows/web-ci.yaml` / `.github/workflows/deliver-notify-api-nortezh.yml` / `tools/test-delivery-workflows.mjs` ไม่รันจาก PR, push topic branch โดยตรง หรือ tag เพื่อประหยัด runner และไม่สร้าง staging deployment
 
 1. Checkout → ติดตั้ง pnpm/Node ตาม version ที่ระบุ
 2. `pnpm install --frozen-lockfile`
@@ -24,7 +26,11 @@ Trigger: push เข้า `main` เป็น build หลัก, เปิด/
 5. Load image เข้า runner แล้ว smoke test ว่า process user เป็น `node`, หน้า `/` ตอบสำเร็จ, BFF ทั้งสามเส้นทางรับ localhost และตอบ invalid query/ID ด้วย 400 (ไม่ใช่ถูก guard ปฏิเสธ 403) และยังปฏิเสธ Host ภายนอกด้วย 403 โดยไม่ต้องใช้ backend
 6. Export `docker save` เป็น `backoffice-image.tar` ใน Actions artifact ชื่อ `backoffice-image-<commit SHA>` เก็บ 3 วัน ดาวน์โหลดแล้วใช้ `docker load -i backoffice-image.tar` ได้
 
-**ไม่มี registry login / push / deploy ใน workflow นี้** ไม่ต้องใช้ `NTZ_SVA_*` และไม่สร้าง revision ให้ `smart-breaker-web` จาก template เดิม ใช้ token สิทธิ์ `contents: read` เท่านั้น เมื่อไฟล์ถูกนำเข้ repository และรันบน GitHub จึงจะมีผล CI จริง การตรวจไฟล์บนเครื่องไม่ใช่ผล Actions run
+7. เฉพาะ `github.event_name == 'push' && github.ref == 'refs/heads/main'` เรียก `.github/workflows/deliver-notify-api-nortezh.yml` ด้วย `app: web` หลัง `needs: dockerize` เพื่อ publish image ที่ทดสอบแล้วและ deploy; manual แม้เลือก `main` ก็เป็น build-only ไม่ publish/deploy ส่วน PR ไม่เริ่ม workflow
+
+Build/test ใช้ `contents: read`; ให้ `packages: write` เฉพาะ delivery job ไม่ใช้ `secrets: inherit` และไม่ให้ DB/FCM/API credentials แก่ build ส่วน reusable flow ตรวจ source → protected environment `notify-web-production` → target/runtime/access preflight **ก่อน GHCR push** → download artifact ของ run ปัจจุบัน → `docker load` image `notify-backoffice:${github.sha}` → retag/push image เดิมและบันทึก digest → Nortezh ใช้ exact tag เดียวกัน ไม่มี rebuild ใน delivery และไม่ cancel deployment ที่กำลังทำงานเมื่อมี push ใหม่ ดู [handoff และ environment variables](nortezh-go-delivery-th.md) ไม่มี staging หรือ release-tag caller และไม่ใช้ `smart-breaker-web`
+
+Web target คือ `internal-tools` / `olufy-0` / `notify-alarm-web`, WebService พอร์ต 3010 ต้องตรวจ existing target และ runtime จริงก่อนตั้ง `NTZ_EXISTING_TARGET_CONFIRMED=true`, `NTZ_RUNTIME_READY=true`; ต้องตั้ง authenticated ingress/private access แยกและยืนยัน `NTZ_WEB_ACCESS_PROTECTED=true` ด้วย ไม่ได้เพิ่ม login หรือขยาย Host gate และ external default requests ยัง 403
 
 Smoke test ยืนยันแค่ image เริ่มเซิร์ฟเวอร์/ข้อจำกัด Host ไม่ยืนยันว่าเชื่อม backend, PostgreSQL, FCM หรือ Pixel สำเร็จ
 
@@ -75,7 +81,7 @@ URL ข้างบนไม่ใช่ production endpoint ของโคร�
 
 ยังคง **localhost-only BFF** และ read-only UI เดิม: GET `/api/history`, `/api/stats`, `/api/alerts/{id}` ส่งต่อเฉพาะ GET `/v1/history`, `/v1/stats`, `/v1/alerts/{id}` ไม่ส่งแจ้งเตือนหรือ Ack จาก dashboard
 
-การ bind `0.0.0.0` ภายใน container กับการอนุญาต user เป็นคนละเรื่อง ใช้ `-p 127.0.0.1:...` สำหรับ local test ไม่เปิด `-p 3010:3010` สู่ LAN/internet โดยไม่ตั้งใจ Host/Origin gate ไม่ใช่ระบบยืนยันตัวตน จึง **ยังไม่พร้อมเปิด public domain** โดยแค่เอา image นี้ deploy ต้องออกแบบ auth/access proxy และ origin policy ที่เหมาะสมก่อน ไม่แก้ gate ให้รับทุก host เพื่อให้ staging ผ่าน
+การ bind `0.0.0.0` ภายใน container กับการอนุญาต user เป็นคนละเรื่อง ใช้ `-p 127.0.0.1:...` สำหรับ local test ไม่เปิด `-p 3010:3010` สู่ LAN/internet โดยไม่ตั้งใจ Host/Origin gate ไม่ใช่ระบบยืนยันตัวตน จึง **ยังไม่พร้อมเปิด public domain** โดยแค่เอา image นี้ deploy ต้องออกแบบ auth/access proxy และ origin policy ที่เหมาะสมก่อน ไม่แก้ gate ให้รับทุก host เพื่อให้ deployment ผ่าน
 
 Next standalone อาจสร้าง request URL ภายในจาก bind address `0.0.0.0` ตัว guard จึงแยก metadata นี้ออกจาก Host ที่ผู้ใช้ส่ง: ยอมรับ URL ภายในดังกล่าวเฉพาะเมื่อ Host จริงเป็น loopback, port ตรงกัน และ Origin (ถ้ามี) ตรงกับ Host ไม่ยอมรับ `Host: 0.0.0.0`, LAN IP หรือ public domain
 
@@ -95,4 +101,4 @@ BFF ไม่ตาม upstream redirect, จำกัด response 1 MiB, ตร
 
 ทดสอบ standalone บน Windows/loopback จริงแล้ว: หน้า `/` และ static asset ตอบ 200, BFF ทั้งสามเส้นทางผ่าน local guard ไปถึง query/ID validation (400), foreign Host/Origin ถูกปฏิเสธ 403 โดยส่ง raw HTTP headers จริง ไม่ใช้ backend/credential และหยุด process ทดสอบแล้ว ผลนี้ไม่ใช่การทดสอบ Linux container
 
-เครื่องนี้ยังติดต่อ Docker Desktop Linux engine ไม่ได้ จึง **ยังไม่ยืนยัน Docker image build/run จริงหรือ GitHub Actions run** ไม่สรุปว่าผ่าน container smoke จากการ build Next บน Windows และไม่มี image push/deploy เกิดขึ้น
+ผล local ข้างต้นเป็นหลักฐานเดิม ไม่ใช่ผล delivery ชุดใหม่ มี main CI รุ่น build-only ที่ผ่านก่อนหน้านี้ แต่ **ยังไม่ได้รัน configuration main-delivery ใหม่บน GitHub และยังไม่มี live image publication/deployment ในงานนี้** ไม่สรุปว่า container/production พร้อมจาก Next build บน Windows หรือ CI รุ่นก่อน ต้องตรวจ run/image digest/Nortezh revision/runtime/access จริงภายหลัง
