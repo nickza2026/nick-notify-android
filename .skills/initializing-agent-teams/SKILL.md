@@ -16,6 +16,8 @@ Create a small reusable team, not seven running workers. Detect the active harne
 | Public GitHub instructions instead of workstation paths | [Pinned public GitHub source](references/public-github-source.md) |
 | Exact native formats and limitations | [Native adapters](references/native-adapters.md) |
 | Seven role contracts, delegation, and model defaults | [Roles and models](references/roles-and-models.md), [canonical contracts](assets/roles.json) |
+| Codex example from a role/model/reasoning screenshot | [Codex and Letta-with-Codex example](references/codex-model-example.md) |
+| Cursor advisor/DB/security model preference | [Cursor Opus 5.5 high example](references/cursor-model-example.md) |
 | Evidence/version boundaries | [Source baseline](references/source-baseline.md) |
 | Verification cases | [Acceptance scenarios](references/acceptance-scenarios.md) |
 
@@ -45,7 +47,7 @@ After the conversational confirmation and capability checks:
 node "<nick-skills>/skills/initializing-agent-teams/scripts/init-agent-team.mjs" --project "<project>" --harness cursor --apply --approved --capabilities-confirmed
 ```
 
-Use `--models "<approved-model-map.json>"` for confirmed overrides, starting from [the model-map example](assets/model-overrides.example.json). `inherit` becomes an omitted model field where required by the adapter, not an invalid literal Codex model ID. Reasoning controls remain inherited unless configured separately through verified native settings; the helper does not invent cross-harness effort fields.
+Use `--models "<approved-model-map.json>"` for confirmed overrides, starting from [the model-map example](assets/model-overrides.example.json). `inherit` becomes an omitted model field where required by the adapter, not an invalid literal Codex model ID. The optional Codex-only `--reasoning "<approved-role-efforts.json>"` writes verified `model_reasoning_effort` values to Codex TOML; see [the screenshot-based example](references/codex-model-example.md). For Letta, do not invent an effort frontmatter field: the helper rejects `--reasoning` and uses only verified model handles or inheritance.
 
 Existing AGENTS.md/CLAUDE.md content is preserved. If it needs a new pointer, review the plan and explicitly add `--append-entrypoints`; this appends a marked block without replacing existing text. Conflicting definitions, changed managed blocks, symlinks/junctions, hardlinks, and malformed markers stop the plan. No force/overwrite mode is provided.
 

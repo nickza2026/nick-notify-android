@@ -48,6 +48,15 @@ function modelMap(input = {}) {
   }));
 }
 
+function reasoningMap(input = {}) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) fail('Reasoning must be a role-to-effort JSON object');
+  for (const [role, effort] of Object.entries(input)) {
+    if (!roles.some(candidate => candidate.id === role)) fail(`Unknown reasoning role: ${role}`);
+    if (!['low', 'medium', 'high'].includes(effort)) fail(`Unsupported example reasoning effort for ${role}`);
+  }
+  return input;
+}
+
 function prompt(role) {
   return [
     `You are nick-${role.id}. ${role.instructions}`,
@@ -62,12 +71,13 @@ function prompt(role) {
   ].join('\n');
 }
 
-function renderAgent(harness, role, model) {
+function renderAgent(harness, role, model, reasoning) {
   const name = `nick-${role.id}`;
   const body = prompt(role);
   if (harness === 'codex') {
     return `name = ${json(name)}\ndescription = ${json(role.description)}\n`
       + (model === 'inherit' ? '' : `model = ${json(model)}\n`)
+      + (reasoning === undefined ? '' : `model_reasoning_effort = ${json(reasoning)}\n`)
       + `developer_instructions = ${json(body)}\n`;
   }
   const lines = ['---', `name: ${name}`, `description: ${json(role.description)}`];
@@ -135,9 +145,11 @@ export function makePlan(options) {
     || root === fs.realpathSync(os.homedir())) fail('Select a project directory, not a filesystem root or user home');
   const source = sourceBinding(options);
   const models = modelMap(options.models);
+  if (options.reasoning !== undefined && options.harness !== 'codex') fail('--reasoning is supported only for the Codex adapter; Letta has no verified per-agent effort field');
+  const reasoning = options.reasoning === undefined ? {} : reasoningMap(options.reasoning);
   const files = roles.map(role => ({
     relative: `${adapter.directory}/nick-${role.id}.${adapter.extension}`,
-    content: renderAgent(options.harness, role, models[role.id]),
+    content: renderAgent(options.harness, role, models[role.id], reasoning[role.id]),
   }));
   for (const file of files) {
     const target = safePath(root, file.relative);
@@ -149,6 +161,7 @@ export function makePlan(options) {
   }
   const state = {
     schemaVersion: 1, harness: options.harness, preset: 'balanced', models,
+    ...(options.reasoning === undefined ? {} : { reasoning }),
     policy: { maxParallel: 2, maxDelegationDepth: 1, writerOwnership: 'one-per-file', publication: 'explicit-task-authorization' },
     permissionCaveat: adapter.enforcement,
     ...(source.kind === 'local' ? { bundleRoot: source.root } : { source, remoteAvailability: 'not-checked', rendererSnapshotMatch: 'not-checked' }),
@@ -159,7 +172,7 @@ export function makePlan(options) {
   const target = safePath(root, relative);
   const content = `${JSON.stringify(state, null, 2)}\n`;
   files.push({ relative, content, status: !fs.existsSync(target) ? 'create' : fs.readFileSync(target, 'utf8') === content ? 'unchanged' : 'conflict' });
-  return { root, harness: options.harness, source, models, permissionCaveat: adapter.enforcement, files };
+  return { root, harness: options.harness, source, models, reasoning, permissionCaveat: adapter.enforcement, files };
 }
 
 export function applyPlan(plan, options) {
@@ -209,7 +222,7 @@ export function applyPlan(plan, options) {
 
 export function parseArgs(args) {
   const options = {};
-  const values = { '--project': 'project', '--harness': 'harness', '--bundle': 'bundle', '--models': 'modelsFile', '--github-ref': 'githubRef' };
+  const values = { '--project': 'project', '--harness': 'harness', '--bundle': 'bundle', '--models': 'modelsFile', '--reasoning': 'reasoningFile', '--github-ref': 'githubRef' };
   const flags = { '--apply': 'apply', '--approved': 'approved', '--capabilities-confirmed': 'capabilitiesConfirmed', '--pi-extension-confirmed': 'piExtensionConfirmed', '--append-entrypoints': 'appendEntrypoints', '--github-source-confirmed': 'githubSourceConfirmed' };
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -220,6 +233,7 @@ export function parseArgs(args) {
     else fail(`Unknown option: ${arg}`);
   }
   if (options.modelsFile) options.models = JSON.parse(fs.readFileSync(options.modelsFile, 'utf8'));
+  if (options.reasoningFile) options.reasoning = JSON.parse(fs.readFileSync(options.reasoningFile, 'utf8'));
   return options;
 }
 
@@ -229,6 +243,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
     const plan = makePlan(options);
     const written = options.apply ? applyPlan(plan, options) : [];
     console.log(JSON.stringify({ mode: options.apply ? 'apply' : 'dry-run', harness: plan.harness, source: plan.source, models: plan.models,
+      ...(options.reasoning === undefined ? {} : { reasoning: plan.reasoning }),
       remoteAvailability: plan.source.kind === 'github' ? 'not-checked' : 'not-applicable',
       permissionCaveat: plan.permissionCaveat, nativeVerification: 'pending',
       startupLoading: plan.harness === 'letta' ? 'Automatic project-file injection not verified; explicitly read AGENTS.md until confirmed in this installation' : 'Verify project startup discovery, cwd, trust, and instruction overrides in the installed client',

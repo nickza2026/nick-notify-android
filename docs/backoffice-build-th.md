@@ -8,29 +8,29 @@ Node pin อัปเดตตาม [security release 21 ต.ค. 2026 ขอ�
 
 ไฟล์ที่เกี่ยวข้อง:
 
-- `.github/workflows/web-ci.yaml`: **Validate Notify Web** ไม่มี staging environment
+- `.github/workflows/web-production.yaml`: standalone **Deploy Notify Web To Production** ตาม Nick Skills `4a70d2f` มีสอง jobs `dockerize_n_push → deploy` เท่านั้น ไม่มี reusable/caller หรือ staging
+- `docs/deployment/nortezh-workflows.json`: reviewed-template adaptation ไม่ใช่ portable renderer input โดยตรง; ดูข้อจำกัดใน [คู่มือ delivery](nortezh-go-delivery-th.md) ห้ามใช้ CLI `--apply` กับ manifest นี้ตรง ๆ
+- `tools/test-standalone-nortezh.mjs`: project workflow contract tests
 - `dashboard/Dockerfile`: multi-stage build และ runtime แบบ non-root (`node`)
 - `dashboard/.dockerignore`: allowlist สำหรับ context `dashboard/` เท่านั้น
 - `dashboard/next.config.ts`: `output: 'standalone'` เพื่อลด runtime dependencies
 
-API มี CI แยกที่ `.github/workflows/api-ci.yaml` และไม่สรุปว่า API พร้อมใช้เพราะ backoffice build ผ่าน
+API มี standalone workflow แยกที่ `.github/workflows/api-production.yaml` ใช้ root `Dockerfile.go` context `.` และไม่สรุปว่า API พร้อมใช้เพราะ backoffice build ผ่าน ไม่ย้าย Dockerfiles หรือเพิ่ม Swagger
 
 ## 2. Pipeline และผลลัพธ์
 
-Trigger: push เข้า `main` เป็น build หลักและส่งต่อ delivery หลัง tests/dockerize ผ่าน หรือกด `workflow_dispatch` โดย push กรองการแก้ `dashboard/**` / `.github/workflows/web-ci.yaml` / `.github/workflows/deliver-notify-api-nortezh.yml` / `tools/test-delivery-workflows.mjs` ไม่รันจาก PR, push topic branch โดยตรง หรือ tag เพื่อประหยัด runner และไม่สร้าง staging deployment
+Trigger: push เข้า `main` หรือ `workflow_dispatch` แบบ branch build โดย push filters รวม `dashboard/**`, workflow ของตน, `tools/test-standalone-nortezh.mjs`, `docs/deployment/nortezh-workflows.json` และสกิลสองไฟล์ที่ใช้จริง `.skills/deploying-go-to-nortezh/scripts/render-workflows.mjs`, `.skills/deploying-go-to-nortezh/assets/workflow-service.yaml.tmpl` Docs/skills อื่นไม่ trigger ยกเว้นอยู่ใน `dashboard/**` ไม่รัน PR, topic push หรือ tag ตามนโยบายเดิม ไม่มี staging/release Operator ต้องทบทวนชื่อ required PR checks เก่าที่อาจรอค้าง งานนี้ไม่เปลี่ยน GitHub settings
 
-1. Checkout → ติดตั้ง pnpm/Node ตาม version ที่ระบุ
-2. `pnpm install --frozen-lockfile`
-3. `pnpm exec next typegen` → `pnpm typecheck` → `pnpm test` → `pnpm build`
-4. เมื่อ test job ผ่าน จึง build image `linux/amd64` จาก **context `./dashboard`** และ Dockerfile `./dashboard/Dockerfile`
-5. Load image เข้า runner แล้ว smoke test ว่า process user เป็น `node`, หน้า `/` ตอบสำเร็จ, BFF ทั้งสามเส้นทางรับ localhost และตอบ invalid query/ID ด้วย 400 (ไม่ใช่ถูก guard ปฏิเสธ 403) และยังปฏิเสธ Host ภายนอกด้วย 403 โดยไม่ต้องใช้ backend
-6. Export `docker save` เป็น `backoffice-image.tar` ใน Actions artifact ชื่อ `backoffice-image-<commit SHA>` เก็บ 3 วัน ดาวน์โหลดแล้วใช้ `docker load -i backoffice-image.tar` ได้
+1. `dockerize_n_push`: checkout exact `github.sha` โดย `persist-credentials: false` → ตรวจ event/revision → Node 22.23.4 → workflow contract tests → pnpm 10.33.0
+2. `pnpm install --frozen-lockfile` → `pnpm exec next typegen` → `pnpm typecheck` → `pnpm test` → `pnpm build` ทั้งหมดก่อน login/build-push
+3. คง canonical action/order พร้อม approved compatibility override: checkout@v4 → QEMU@v3 → Buildx@v3 → login@v3 → ASzc lowercase@v6 → build-push@v6 → Nortezh@v1.0.5 ไม่อ้างว่า version tags เหล่านี้ SHA-pinned Login เฉพาะ main push
+4. Build `linux/amd64` จาก **context `./dashboard`**/`./dashboard/Dockerfile` พร้อม GHA cache โดย build-push ใช้ `load: true` และ push เฉพาะ main push เป็น output เดียวกัน Tag คือ `ghcr.io/<owner>/<repo>/notify-web:<short SHA>` จาก `git rev-parse --short HEAD` เป็น mutable tag เขียนทับได้/มี collision risk ไม่ใช่ run-unique full-SHA tag ไม่มี exported tar หรือ Actions image artifact; APK artifacts ไม่เปลี่ยน
+5. **หลัง build+push** ตรวจ user `node`, หน้า `/` สำเร็จแบบ bounded localhost smoke, BFF invalid query/ID 400 และ foreign Host 403 โดยไม่ใช้ backend credentials ก่อนส่ง outputs ดังนั้น smoke ล้มอาจมี image ใน GHCR แล้ว แต่ deploy ถูกบล็อก
+6. ส่ง `image_name` พร้อมบันทึก published digest ใน summary; `deploy` เฉพาะ main push หลัง job แรกผ่าน เข้า environment `notify-web-production` ตรวจชื่อ secrets ที่ขาด และส่ง exact short-tag output ให้ Nortezh ไม่ใช่ digest deployment/readiness guarantee
 
-7. เฉพาะ `github.event_name == 'push' && github.ref == 'refs/heads/main'` เรียก `.github/workflows/deliver-notify-api-nortezh.yml` ด้วย `app: web` หลัง `needs: dockerize` เพื่อ publish image ที่ทดสอบแล้วและ deploy; manual แม้เลือก `main` ก็เป็น build-only ไม่ publish/deploy ส่วน PR ไม่เริ่ม workflow
+Manual แม้เลือก main ทำ tests/build/load แต่ไม่ login/push/deploy Job แรกมี `contents: read`, `packages: write`, `attestations: write` ตาม template; deploy มี `permissions: {}` และ service-account secrets เฉพาะ job นี้ Main deployments ไม่ cancel จาก push ใหม่ ดู [handoff และ runtime prerequisites](nortezh-go-delivery-th.md)
 
-Build/test ใช้ `contents: read`; ให้ `packages: write` เฉพาะ delivery job ไม่ใช้ `secrets: inherit` และไม่ให้ DB/FCM/API credentials แก่ build ส่วน reusable flow ตรวจ source → protected environment `notify-web-production` → target/runtime/access preflight **ก่อน GHCR push** → download artifact ของ run ปัจจุบัน → `docker load` image `notify-backoffice:${github.sha}` → retag/push image เดิมและบันทึก digest → Nortezh ใช้ exact tag เดียวกัน ไม่มี rebuild ใน delivery และไม่ cancel deployment ที่กำลังทำงานเมื่อมี push ใหม่ ดู [handoff และ environment variables](nortezh-go-delivery-th.md) ไม่มี staging หรือ release-tag caller และไม่ใช้ `smart-breaker-web`
-
-Web target คือ `internal-tools` / `olufy-0` / `notify-alarm-web`, WebService พอร์ต 3010 ต้องตรวจ existing target และ runtime จริงก่อนตั้ง `NTZ_EXISTING_TARGET_CONFIRMED=true`, `NTZ_RUNTIME_READY=true`; ต้องตั้ง authenticated ingress/private access แยกและยืนยัน `NTZ_WEB_ACCESS_PROTECTED=true` ด้วย ไม่ได้เพิ่ม login หรือขยาย Host gate และ external default requests ยัง 403
+Web target อยู่ inline YAML: `internal-tools` / `olufy-0` / `notify-alarm-web`, WebService พอร์ต 3010 ไม่ต้องตั้ง NTZ Variables ห้ารายการ ใช้ Secrets สองชื่อ `NTZ_SA_EMAIL`, `NTZ_SA_KEY` ใน environment เท่านั้น Built-in `GITHUB_TOKEN` ไม่ต้อง provision ไม่มี custom readiness flags; validation ไม่พิมพ์ค่า email/key และไม่พิสูจน์ authentication ผู้ดูแลยังต้องตั้ง environment reviewers/branch policy (ชื่อ environment ไม่ใช่หลักฐานว่าตั้งแล้ว), ตรวจ existing target หรือขออนุมัติสร้างเพราะ action อาจสร้าง deployment, GHCR pull access/runtime และ authenticated ingress/private access แยก ไม่ได้เพิ่ม login หรือขยาย Host gate; external default requests ยัง 403
 
 Smoke test ยืนยันแค่ image เริ่มเซิร์ฟเวอร์/ข้อจำกัด Host ไม่ยืนยันว่าเชื่อม backend, PostgreSQL, FCM หรือ Pixel สำเร็จ
 
@@ -90,15 +90,15 @@ BFF ไม่ตาม upstream redirect, จำกัด response 1 MiB, ตร
 ## 6. Checklist
 
 - [ ] รัน workflow บน repository จริงและตรวจ test/image/smoke jobs ผ่าน
-- [ ] ตรวจ tar/image ว่าไม่มี `.env`, service-account, device token หรือข้อมูลส่วนตัว
+- [ ] ตรวจ image ว่าไม่มี `.env`, service-account, device token หรือข้อมูลส่วนตัว
 - [ ] ตั้ง backend HTTPS และ runtime secret file โดยไม่ฝังลง build
 - [ ] ทดสอบประวัติ/สถิติ/รายละเอียดด้วย backend ที่ตั้งใจใช้ ไม่ตีความหน้า `/` 200 ว่า DB พร้อม
 - [ ] อนุมัติ auth/domain/deploy target แยกก่อนเปิดภายนอก ไม่ใช้ชื่อบริการ smart-breaker จาก template
 
 ## 7. ผลตรวจในเครื่อง / สิ่งที่ยังไม่ยืนยัน
 
-ตรวจด้วย clean install ใน temporary sandbox แยก เพื่อไม่เขียนทับ `.next` ของ dashboard ที่เปิดอยู่: frozen lockfile install, Next typegen/typecheck, tests 7 เคส และ production standalone build ผ่าน รวม regression สำหรับ bind metadata กับ client Host/Origin ตรวจ workflow ด้วย actionlint ผ่าน (ไม่รวม optional shellcheck ที่ไม่ได้ติดตั้ง)
+หลักฐานก่อนหน้า (ไม่ใช่ standalone workflow รอบนี้): clean install ใน temporary sandbox แยก เพื่อไม่เขียนทับ `.next` ของ dashboard ที่เปิดอยู่ ผ่าน frozen lockfile install, Next typegen/typecheck, tests 7 เคส และ production standalone build รวม regression สำหรับ bind metadata กับ client Host/Origin; workflow รุ่นนั้นผ่าน actionlint (ไม่รวม optional shellcheck ที่ไม่ได้ติดตั้ง)
 
 ทดสอบ standalone บน Windows/loopback จริงแล้ว: หน้า `/` และ static asset ตอบ 200, BFF ทั้งสามเส้นทางผ่าน local guard ไปถึง query/ID validation (400), foreign Host/Origin ถูกปฏิเสธ 403 โดยส่ง raw HTTP headers จริง ไม่ใช้ backend/credential และหยุด process ทดสอบแล้ว ผลนี้ไม่ใช่การทดสอบ Linux container
 
-ผล local ข้างต้นเป็นหลักฐานเดิม ไม่ใช่ผล delivery ชุดใหม่ มี main CI รุ่น build-only ที่ผ่านก่อนหน้านี้ แต่ **ยังไม่ได้รัน configuration main-delivery ใหม่บน GitHub และยังไม่มี live image publication/deployment ในงานนี้** ไม่สรุปว่า container/production พร้อมจาก Next build บน Windows หรือ CI รุ่นก่อน ต้องตรวจ run/image digest/Nortezh revision/runtime/access จริงภายหลัง
+ผล local ข้างต้นเป็นหลักฐานเดิม ส่วน [main Web run 40633786594](https://github.com/nickza2026/nick-notify-android/actions/runs/40633786594) ที่ commit `86fbc4f` ใช้ workflow เก่า: ผ่าน Web tests/build และ Linux container smoke แต่หยุดที่ `approve-target` ก่อน publish/deploy รุ่น standalone ใหม่ปรับหก action versions ตามที่อนุมัติแล้ว ผ่าน project tests 10 ข้อและ actionlint; skill snapshot เดิมผ่าน tests 25 ข้อ ดู [compatibility override และผลตรวจ](nortezh-go-delivery-th.md) Docker Linux engine ยังไม่พร้อม ไม่มี image build/smoke/GitHub execution/rollout รุ่นใหม่ และยังไม่ยืนยัน runtime/public UI หรือ Pixel → Go Ack

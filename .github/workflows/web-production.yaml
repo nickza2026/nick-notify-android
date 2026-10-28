@@ -1,0 +1,174 @@
+name: Deploy Notify Web To Production
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/web-production.yaml"
+      - "dashboard/**"
+      - "tools/test-standalone-nortezh.mjs"
+      - "docs/deployment/nortezh-workflows.json"
+      - ".skills/deploying-go-to-nortezh/scripts/render-workflows.mjs"
+      - ".skills/deploying-go-to-nortezh/assets/workflow-service.yaml.tmpl"
+
+concurrency:
+  group: notify-web-production-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'push' || github.ref != 'refs/heads/main' }}
+
+jobs:
+  dockerize_n_push:
+    name: Dockerize & Push
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Set outputs
+        id: short_sha
+        run: echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+      - name: Validate source event
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$GITHUB_EVENT_NAME:$GITHUB_REF" in
+            push:refs/heads/main|workflow_dispatch:refs/heads/*) ;;
+            *) echo '::error::Only main pushes or manual branch builds are supported.'; exit 1 ;;
+          esac
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.23.4
+      - name: Test workflow contracts
+        run: node --test tools/test-standalone-nortezh.mjs
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: 10.33.0
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/.local/share/pnpm/store
+          key: pnpm-${{ runner.os }}-${{ hashFiles('dashboard/pnpm-lock.yaml') }}
+          restore-keys: pnpm-${{ runner.os }}-
+      - name: Test Web application
+        working-directory: dashboard
+        shell: bash
+        env:
+          NEXT_TELEMETRY_DISABLED: "1"
+        run: |
+          set -euo pipefail
+          pnpm install --frozen-lockfile
+          pnpm exec next typegen
+          pnpm typecheck
+          pnpm test
+          pnpm build
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Log in to GitHub Docker Registry
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: lowercase repository
+        id: repository
+        uses: ASzc/change-string-case-action@v6
+        with:
+          string: ${{ github.repository }}/notify-web
+      - name: Build container image
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          platforms: linux/amd64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          pull: true
+          push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          load: true
+          context: ./dashboard
+          file: ./dashboard/Dockerfile
+          tags: |
+            ghcr.io/${{ steps.repository.outputs.lowercase }}:${{ steps.short_sha.outputs.sha_short }}
+      - name: Verify application container
+        shell: bash
+        env:
+          IMAGE: ghcr.io/${{ steps.repository.outputs.lowercase }}:${{ steps.short_sha.outputs.sha_short }}
+        run: |
+          set -euo pipefail
+          test "$(docker image inspect "$IMAGE" --format '{{.Config.User}}')" = node
+          docker run -d --name backoffice-smoke -p 127.0.0.1:3010:3010 "$IMAGE"
+          trap 'docker logs backoffice-smoke; docker rm -f backoffice-smoke' EXIT
+          ready=false
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:3010/ -o /dev/null; then ready=true; break; fi
+            sleep 1
+          done
+          test "$ready" = true
+          for path in /api/history /api/stats /api/alerts/bad.id; do
+            status=$(curl --silent --show-error -o "$RUNNER_TEMP/backoffice-local.json" -w '%{http_code}' "http://127.0.0.1:3010$path")
+            test "$status" = 400
+          done
+          status=$(curl --silent --show-error -o "$RUNNER_TEMP/backoffice-denied.json" -w '%{http_code}' \
+            -H 'Host: backoffice.example.invalid' http://127.0.0.1:3010/api/history)
+          test "$status" = 403
+      - name: Set output variables
+        id: notify_web
+        shell: bash
+        env:
+          PUBLISHED: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          if [[ "$PUBLISHED" == true ]]; then [[ "$DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]]; fi
+          echo "image_name=ghcr.io/${{ steps.repository.outputs.lowercase }}:${{ steps.short_sha.outputs.sha_short }}" >> $GITHUB_OUTPUT
+          if [[ "$PUBLISHED" == true ]]; then
+            printf 'Published image digest: %s\nVerify the active revision and runtime separately.\n' "$DIGEST" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo 'Manual build only: image not published; deployment skipped.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+    outputs:
+      image_name: ${{ steps.notify_web.outputs.image_name}}
+  deploy:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: dockerize_n_push
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions: {}
+    environment: notify-web-production
+    steps:
+      - name: Validate Nortezh secrets
+        shell: bash
+        env:
+          NTZ_SA_EMAIL: ${{ secrets.NTZ_SA_EMAIL }}
+          NTZ_SA_KEY: ${{ secrets.NTZ_SA_KEY }}
+        run: |
+          set -euo pipefail
+          missing=0
+          for name in NTZ_SA_EMAIL NTZ_SA_KEY; do
+            if [[ -z "${!name-}" ]]; then
+              printf '::error::Secret %s is missing in environment notify-web-production.\n' "$name" >&2
+              missing=1
+            fi
+          done
+          [[ "$missing" == 0 ]]
+      - uses: Nortezh/nortezh-action@v1.0.5
+        with:
+          action: deployment.create-revision
+          project: internal-tools
+          location: olufy-0
+          name: notify-alarm-web
+          image: ${{ needs.dockerize_n_push.outputs.image_name }}
+          type: WebService
+          port: 3010
+        env:
+          SA_AUTH_EMAIL: ${{ secrets.NTZ_SA_EMAIL }}
+          SA_AUTH_KEY: ${{ secrets.NTZ_SA_KEY }}

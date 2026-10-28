@@ -1,0 +1,23 @@
+# syntax=docker/dockerfile:1
+# Example: module-root context, cmd/catalog, generated catalog/docs, port 8080.
+# Select a supported Go image matching the target go.mod; 1.25 is illustrative.
+FROM --platform=$BUILDPLATFORM golang:1.25 AS builder
+ARG TARGETOS=linux
+ARG TARGETARCH=amd64
+WORKDIR /workspace
+COPY go.mod go.sum ./
+RUN go mod download
+# Run the generator on the builder architecture, not a cross-compiled target.
+RUN GOFLAGS="" GOOS="" GOARCH="" go install github.com/swaggo/swag/cmd/swag@v1.16.6
+COPY . .
+# Match the application's import directory and registered Swagger instance.
+RUN swag init -g cmd/catalog/main.go -o catalog/docs --instanceName catalog --parseDependency --parseInternal
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -ldflags="-w -s" -o /out/catalog ./cmd/catalog
+
+FROM gcr.io/distroless/static-debian12:nonroot
+WORKDIR /app
+COPY --from=builder --chown=65532:65532 /out/catalog /app/catalog
+USER 65532:65532
+# Metadata only: the application must actually bind this port and listen on 0.0.0.0.
+EXPOSE 8080
+ENTRYPOINT ["/app/catalog"]

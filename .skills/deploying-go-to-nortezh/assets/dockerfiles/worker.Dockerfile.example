@@ -1,0 +1,17 @@
+# syntax=docker/dockerfile:1
+# Example: module-root context and cmd/processor; no Swagger or service port.
+# Select a supported Go image matching the target go.mod; 1.25 is illustrative.
+FROM --platform=$BUILDPLATFORM golang:1.25 AS builder
+ARG TARGETOS=linux
+ARG TARGETARCH=amd64
+WORKDIR /workspace
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -ldflags="-w -s" -o /out/processor ./cmd/processor
+
+FROM gcr.io/distroless/static-debian12:nonroot
+WORKDIR /app
+COPY --from=builder --chown=65532:65532 /out/processor /app/processor
+USER 65532:65532
+ENTRYPOINT ["/app/processor"]

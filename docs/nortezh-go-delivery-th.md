@@ -1,82 +1,93 @@
-# API + Web: main → GHCR → Nortezh (handoff ภาษาไทย)
+# Deploy API / Web ไป Nortezh ตาม Nick Skills
 
-ผู้ใช้ยืนยัน automatic production delivery สำหรับ API และ Web เมื่อ push `main` ตาม path filters และ tests/build ผ่าน ไม่มี staging ส่วน Android เป็น **manual-only** เอกสารนี้อธิบาย configuration ที่เตรียมในงานนี้ **ไม่ใช่หลักฐานว่า deploy แล้วหรือมี production URL พร้อมใช้** และไม่ใช่การอนุญาต commit/push เพิ่มเติม
+## 1. โครงสร้าง workflow ใหม่
 
-## 1. Workflow และ trigger
+อ้างอิง Nick Skills commit `4a70d2fa56ad0257b0f728fa594e86da468d8f6f` (`4a70d2f`): แต่ละ app ใช้ **standalone full workflow สอง jobs เท่านั้น `dockerize_n_push → deploy`** ไม่มี reusable/caller หรือ jobs เพิ่ม ปรับตามนโยบายโปรเจกต์: **main → production เท่านั้น ไม่มี staging/release และไม่รัน PR** ไม่ย้าย Dockerfiles หรือเพิ่ม Swagger
 
-| Workflow | หน้าที่ |
+| ไฟล์ | หน้าที่ |
 |---|---|
-| `.github/workflows/api-ci.yaml` | push `main` ตาม Go/Docker/workflow paths และ manual: gofmt/build/vet/tests กับ embedded PostgreSQL → dockerize → artifact; เฉพาะ push `main` เรียก delivery ด้วย `app: api`; ไม่รันจาก PR |
-| `.github/workflows/web-ci.yaml` | push `main` ตาม dashboard/workflow paths และ manual: frozen install/typegen/typecheck/tests/build → dockerize/smoke → artifact; เฉพาะ push `main` เรียก delivery ด้วย `app: web`; ไม่รันจาก PR |
-| `.github/workflows/deliver-notify-api-nortezh.yml` | reusable `workflow_call`: source guard → protected environment/target preflight → publish tested image → deploy exact tag |
-| `.github/workflows/android-apk.yaml` | `workflow_dispatch` เท่านั้น ไม่มี automatic Android compile บน push `main`; signed APK job เฉพาะ `main` และคง signer validation ตาม [คู่มือ APK](github-apk-build-th.md) |
+| `.github/workflows/api-production.yaml` | API: `dockerize_n_push → deploy`; main push ตาม Go/Docker/workflow paths หรือ manual branch build |
+| `.github/workflows/web-production.yaml` | Web: `dockerize_n_push → deploy`; main push ตาม dashboard/workflow paths หรือ manual branch build |
+| `.github/workflows/android-apk.yaml` | คงเดิม: manual-only; signed APK job เฉพาะ main และ signer validation เดิม |
 
-ถอด PR trigger ทั้ง API/Web เพื่อประหยัด runner: เปิด/อัปเดต PR ไม่เริ่ม tests/build เลย แต่ยังตรวจ tests ก่อน deploy เมื่อ push `main` ส่วน manual แม้เลือก `main` **ไม่ publish/deploy** ไม่มี release/tag trigger; release-production `.example` เดิมถูกถอด ไม่ต้องย้าย template เข้า workflows อีก ไม่ใช้ topic branch push หรือ `pull_request_target` เพื่อ delivery
+Path filters รวม source/Docker dependencies ของ app, workflow ของตน, `tools/test-standalone-nortezh.mjs`, `docs/deployment/nortezh-workflows.json` และไฟล์สกิลที่ใช้จริงสองไฟล์เท่านั้น: `.skills/deploying-go-to-nortezh/scripts/render-workflows.mjs` กับ `.skills/deploying-go-to-nortezh/assets/workflow-service.yaml.tmpl` การแก้ docs/skills อื่นไม่ trigger ยกเว้นอยู่ใน `dashboard/**` ไม่มี PR, topic-branch push หรือ tag trigger
 
-API push path filters ครอบคลุม `backend/**`, `Dockerfile.go`, `Dockerfile.go.dockerignore` และ API/shared delivery workflows; Web ครอบคลุม `dashboard/**` และ Web/shared delivery workflows ทั้งคู่รวม `tools/test-delivery-workflows.mjs` เพื่อให้การแก้ safety checks ถูกทดสอบ การแก้เฉพาะ docs ไม่เริ่ม deploy
+`docs/deployment/nortezh-workflows.json` เป็น **reviewed-template adaptation** บันทึกข้อตกลงที่ตรวจทานแล้ว ไม่ใช่ portable renderer input ที่ใช้ได้ตรง ๆ: มี `context`, `githubEnvironment`, `policy` และ Docker paths จริงต่างจาก `build/<app>/Dockerfile` ของ renderer อย่าใช้ CLI `--apply` กับ manifest นี้โดยตรง Helper ของโปรเจกต์คือ `tools/test-standalone-nortezh.mjs`; layout/helper รุ่นก่อนถูกแทนที่แล้ว
 
-Caller ใช้ `needs: dockerize` และ guard `github.event_name == 'push' && github.ref == 'refs/heads/main'` ทั้งสอง app ส่วน reusable ตรวจ main-push source ซ้ำและรับเฉพาะ `app: api`/`web` ก่อนเลือก environment **concurrency ต้องไม่ cancel in-flight main deployments** เมื่อมี push ใหม่ การรันมือที่ซ้ำกันยังยกเลิก run เก่าได้ ถ้า branch protection เดิมบังคับ PR status checks ที่ถูกถอด trigger นี้ ผู้ดูแลต้องปรับ required checks ให้สอดคล้อง มิฉะนั้น PR อาจรอ check ที่จะไม่รัน งานนี้ไม่แก้ branch protection บน GitHub เอง
+ถ้า branch protection เดิมบังคับ PR status checks ที่ไม่รันแล้ว ผู้ดูแลต้องปรับ required checks ให้สอดคล้องกับนโยบาย no-PR-CI นี้ มิฉะนั้น PR อาจรอ check ค้าง งานนี้ไม่แก้ GitHub branch protection เอง
 
-## 2. ส่ง image เดียวกับที่ทดสอบ ไม่ rebuild
+Manual run รับเฉพาะ branch ทำ **tests/build/load เท่านั้น** แม้เลือก main ก็ไม่ login/push GHCR และไม่ deploy (`push: false`, `load: true`) ส่วน main push ใช้ push/load output เดียวกันและไม่ cancel in-flight main deployment เมื่อมี push ถัดมา Concurrency ไม่รับประกันลำดับโปรโมชั่นตามเวลา ต้องตรวจ revision ที่ active จริงก่อน rollout/rollback
 
-| App | Docker source/context | Artifact ของ run ปัจจุบัน | Image ภายใน tar |
+## 2. ลำดับงานและ image identity
+
+1. **`dockerize_n_push`** — checkout exact `github.sha` และ `persist-credentials: false`; ตรวจ event/revision แล้วรัน workflow contract tests ด้วย Node 22.23.4 และ application tests **ก่อน login/build-push**
+   - API: Go จาก `backend/go.mod`, gofmt/build/vet/tests ใช้ embedded PostgreSQL แยก ไม่ใช้ production credentials
+   - Web: pnpm 10.33.0, frozen install, Next typegen/typecheck/tests/build
+2. คง action/order หลักตาม template พร้อม compatibility override หกรายการที่ผู้ใช้อนุมัติ: `actions/checkout@v4` → `docker/setup-qemu-action@v3` → `docker/setup-buildx-action@v3` → `docker/login-action@v3` → `ASzc/change-string-case-action@v6` → `docker/build-push-action@v6` → `Nortezh/nortezh-action@v1.0.5` (action สุดท้ายอยู่ deploy) เหล่านี้เป็น version tags **ไม่ใช่ SHA-pinned versions**; steps ทดสอบที่เพิ่มอยู่ก่อน login
+3. Build `linux/amd64` พร้อม Buildx GHA cache; API ใช้ context `.`/root `Dockerfile.go`; Web ใช้ context `./dashboard`/`./dashboard/Dockerfile` Login และ push เฉพาะ main push; build-push **build, push และ load output เดียวกัน** ไม่ export image tar หรือ Actions image artifact (APK artifacts คงเดิม)
+4. หลัง build+push ก่อนส่ง outputs/deploy: API inspect user `65532:65532`; Web ตรวจ user `node` และ smoke แบบ bounded ที่ `127.0.0.1:3010` หน้า `/` สำเร็จ, BFF invalid query/ID 400 และ foreign Host 403 โดยไม่ใช้ backend credentials **หาก smoke ล้ม image อาจอยู่ใน GHCR แล้ว แต่ deploy ถูกบล็อก** ไม่ใช่ pre-publication gate
+5. ส่ง `image_name=ghcr.io/<owner>/<repo>/notify-<api|web>:<short SHA>` โดย SHA มาจาก `git rev-parse --short HEAD` และบันทึก published digest ใน step summary Tag นี้ mutable/เขียนทับได้ มีความเสี่ยง short-SHA collision ไม่ใช่ full-SHA/run-ID tag หรือ immutable identity
+6. **`deploy`** — `needs: dockerize_n_push`, เฉพาะ main push เข้า environment ของ app ตรวจชื่อ secrets ที่ขาดแล้วเรียก `deployment.create-revision` ด้วย exact short-tag `needs.dockerize_n_push.outputs.image_name` ไม่ได้ deploy ด้วย digest และไม่รับประกัน readiness
+
+Job แรกมี `contents: read`, `packages: write`, `attestations: write` ตาม template (permissions ไม่ใช่หลักฐานว่าได้สร้าง attestation) ใช้ built-in `GITHUB_TOKEN` สำหรับ GHCR ส่วน deploy มี `permissions: {}` Nortezh service-account secrets ใช้เฉพาะ deploy job ไม่ส่ง DB/FCM/dashboard API key เข้า tests หรือ Docker build
+
+## 3. GitHub Environments และค่าที่ต้องตั้ง
+
+ผู้ดูแลตั้ง repository → **Settings → Environments** และกำหนด reviewers/deployment branch policy ตาม production approval ที่ต้องการ การมีชื่อ environment ใน YAML ไม่ได้พิสูจน์ว่ามี protection rules แล้ว งานแก้ workflow นี้ไม่ตั้งค่าหรือใส่ secrets บน GitHub เอง
+
+| ค่า | ตำแหน่ง | `notify-api-production` | `notify-web-production` |
 |---|---|---|---|
-| API | `Dockerfile.go` / root พร้อม `Dockerfile.go.dockerignore`; Go module อยู่ `backend/` | `notify-api-image-${github.sha}` มี `api-image.tar` | `notify-api:${github.sha}` |
-| Web | `dashboard/Dockerfile` / `dashboard/`, Next standalone | `backoffice-image-${github.sha}` มี `backoffice-image.tar` | `notify-backoffice:${github.sha}` |
+| project | inline YAML | `internal-tools` | `internal-tools` |
+| location | inline YAML | `olufy-0` | `olufy-0` |
+| name | inline YAML | `notify-alarm-api` | `notify-alarm-web` |
+| type | inline YAML | `WebService` | `WebService` |
+| port | inline YAML | `8787` | `3010` |
+| `NTZ_SA_EMAIL` | Secret | service-account email ที่ได้รับอนุมัติ | service-account email ที่ได้รับอนุมัติ |
+| `NTZ_SA_KEY` | Secret | service-account key ที่ได้รับอนุมัติ | service-account key ที่ได้รับอนุมัติ |
 
-Dockerize รอ tests ผ่าน สร้าง/load/export image โดยไม่ push และ upload artifact สำเร็จก่อน delivery เริ่ม หลัง protected-environment preflight ผ่าน reusable download **artifact ใน run ปัจจุบันเท่านั้น** แล้ว `docker load` / retag / push image ที่ทดสอบแล้ว ไม่ rebuild จากอีก revision ไม่ดึง artifact ล่าสุดจาก run อื่น ถ้า artifact หาย/ชื่อผิดให้ fail ไม่ fallback
+ต้อง provision **Secrets สองชื่อเท่านั้น** `NTZ_SA_EMAIL`, `NTZ_SA_KEY` ในแต่ละ environment ไม่ต้องตั้ง NTZ Variables ห้ารายการอีกแล้วเพราะ targets/constants อยู่ inline YAML Workflow ส่ง secrets เป็น `SA_AUTH_EMAIL` / `SA_AUTH_KEY` ให้ Nortezh action ไม่ใส่ค่าจริงใน source, logs, Docker args หรือแชต Built-in `GITHUB_TOKEN` ไม่ใช่ user secret ที่ต้อง provision
 
-upload ใช้ `overwrite: true` เพื่อให้ re-run dockerize ใน run เดิมแทน artifact ชื่อเดิมได้; หาก re-run เฉพาะ delivery ที่ล้ม ยังใช้ artifact ที่ทดสอบผ่านของ run เดิม ไม่หยิบจาก run อื่น ส่วน tag GHCR รวม run attempt จึงไม่ทับ tag ของความพยายามก่อนหน้า
+**ไม่มี custom readiness flags หรือ approve-target job แล้ว** ใช้ configuration ตามสกิลแทน ค่าพวกนี้ไม่ได้ตรวจ runtime ได้จริงอยู่แล้ว การถอด flags ไม่ใช่การอนุมัติให้ข้ามการเตรียม target/database/authentication
 
-GHCR publish บันทึก digest ใน Actions summary/output แล้ว Nortezh ใช้ **exact tag เดียวกับที่ publish สำเร็จ** ไม่ใช้ `latest` หรือเดา tag ใหม่ Unique tag ไม่ใช่ immutable guarantee: ตรวจ digest/revision หลัง deploy และพิจารณา digest pinning เมื่อยืนยัน platform support แล้ว GHCR private ต้องตั้ง pull access ฝั่ง Nortezh แยกจาก `GITHUB_TOKEN` ของ Actions
+ตรวจเฉพาะ secrets ที่ขาดใน `deploy` **หลัง publish/smoke** ดังนั้น image อาจอยู่ใน GHCR แล้วแม้ deploy หยุดเพราะ secrets ไม่ครบ ไม่มีการเรียก Nortezh เมื่อ validation ไม่ผ่าน ไม่ fallback ไป target อื่น
 
-Build/test ใช้ `contents: read` และไม่รับ Nortezh/DB/FCM/API credentials ให้ `packages: write` เฉพาะ caller delivery job ไม่ใช้ `secrets: inherit` Nortezh secrets อ่านเฉพาะ environment jobs ห้ามส่ง DB/FCM keys เข้า Docker build/ARG/image/artifact
+ตัวอย่าง error ใหม่:
 
-## 3. Protected environments และ operator preflight ก่อน GHCR push
+```text
+Secret NTZ_SA_KEY is missing in environment notify-api-production.
+```
 
-| App | GitHub environment | Project / location | Deployment / type / port |
-|---|---|---|---|
-| API | `notify-api-production` | `internal-tools` / `olufy-0` | `notify-alarm-api` / `WebService` / `8787` |
-| Web | `notify-web-production` | `internal-tools` / `olufy-0` | `notify-alarm-web` / `WebService` / `3010` |
+รายงานเฉพาะชื่อ Secret ที่ขาด ไม่แสดงค่า email/key การผ่าน validation ไม่พิสูจน์ว่า credentials authenticate ได้หรือ target พร้อมให้บริการ
 
-จำกัด environment deployment branch ให้ตรง `main`; required reviewers เป็นนโยบายของทีม ไม่ได้เพิ่มให้เอง ถ้าตั้ง reviewer จะพักรออนุมัติที่ environment jobs (preflight และ deploy อาจต้องอนุมัติสองครั้ง) หากต้องการ unattended delivery ให้ใช้ branch protection/CI และไม่ตั้ง reviewer gate ราย run อย่าถือว่าชื่อ environment ถูกเท่ากับมี approval (GitHub อาจสร้าง environment เปล่าจากชื่อที่สะกดผิด) ผู้ดูแลต้องตรวจ target ที่เตรียมไว้จริงใน Nortezh UI/API เพราะ action สร้าง revision อาจสร้าง deployment ที่ไม่ตั้งค่าหากชื่อผิด ห้ามเดาหรือเติม suffix ให้ target
+## 4. เตรียม Nortezh runtime ก่อนเปิด delivery
 
-ตั้ง variables/secrets **แยกในแต่ละ environment**:
+ตรวจ existing targets/project/location/ports ให้ตรง หรือขออนุมัติสร้าง target ก่อนเปิด production run เพราะ `deployment.create-revision` อาจสร้าง deployment เมื่อชื่อยังไม่มี ห้ามใช้ pipeline เป็นวิธีเดาสร้าง service/ตั้ง runtime แทน operator
 
-| ชื่อ | ประเภท / เงื่อนไข |
-|---|---|
-| `NTZ_PROJECT`, `NTZ_LOCATION` | Variables: `internal-tools`, `olufy-0` |
-| `NTZ_DEPLOYMENT`, `NTZ_TYPE`, `NTZ_PORT` | Variables: ตรงแถว API/Web ข้างบน; preflight ตรวจ exact target/type/port ก่อน GHCR push |
-| `NTZ_EXISTING_TARGET_CONFIRMED` | Variable `true` **หลัง operator ตรวจ existing prepared target จริง** ไม่ตั้งเพื่อข้าม guard |
-| `NTZ_RUNTIME_READY` | Variable `true` **หลัง operator อนุมัติ runtime configuration** ของ app นั้น เป็น attestation ไม่ใช่ health proof |
-| `NTZ_WEB_ACCESS_PROTECTED` | Web-only variable `true` หลังตั้งและตรวจ authenticated ingress/private access **แยกจาก source app** ไม่ใช่การเพิ่ม login หรืออนุมัติ public access |
-| `NTZ_SA_EMAIL`, `NTZ_SA_KEY` | Environment Secrets ของ Nortezh service account; action รับ `SA_AUTH_EMAIL`/`SA_AUTH_KEY` ไม่ใส่ใน repo/chat/build jobs |
+ตั้ง GHCR pull access ของ Nortezh แยกสำหรับ private image: GitHub login/push สำเร็จไม่ได้ให้สิทธิ์ดึง image แก่ Nortezh โดยอัตโนมัติ รวมถึงตรวจ resources, replica/scale policy, network, TLS, health checks และ rollback
 
-Source guard → protected environment approval → target/runtime/access preflight **ก่อน GHCR push** เป็น fail-closed boundary ถ้าค่าว่าง/ผิด/ยังไม่อนุมัติให้หยุดก่อนเผยแพร่ Attestation ไม่แทนการตรวจ live target, ingress หรือ readiness จริง
+### API
 
-## 4. API runtime บน Nortezh (ไม่ใช่ build secrets)
+- Container ใช้ `HOST=0.0.0.0`, `PORT=8787`; PostgreSQL เป็น external UTF-8 database ไม่ใช้ embedded test cluster ใน production
+- ตั้ง `DATABASE_URL`, `ALERT_API_KEY`, selected FCM credential file/mount, `GOOGLE_APPLICATION_CREDENTIALS`, `FCM_DEVICE_TOKEN` และ HTTPS `ACK_PUBLIC_BASE_URL` ตาม runtime contract ไม่ใส่ค่าจริงใน workflow
+- Go startup ทำ schema migration ต้องกำหนด migration ownership/backup และตรวจความเข้ากันได้กับ binary เก่าก่อน rollout ไม่เชื่อมฐานจริงหรือย้ายข้อมูลโดยอนุมานสิทธิ์จากการแก้ YAML
+- Key ของ caller อยู่ฝั่ง server เท่านั้น ดู request/error/idempotency/Ack ใน [integration guide](service-integration-th.md)
 
-- `DATABASE_URL`: PostgreSQL ภายนอก **UTF8** ใช้ TLS ตรวจ hostname/CA และสิทธิ์ migration ที่เหมาะสม Go ตรวจ encoding และ auto-migrate ก่อนเปิด listener; migration `backend/migrations/001_init.sql` ฝัง binary ด้วย `go:embed` ไม่ต้อง copy SQL แยก ไม่ใช้ embedded demo เป็น production
-- ทบทวน schema/backup/rollback **ก่อน** revision ใหม่เริ่ม เพราะ startup เขียน schema จริง ไม่มี staging DB และ migration ปัจจุบันไม่ใช่ versioned rollback runner ห้ามยิง DDL/synthetic alert ใส่ข้อมูลจริงโดยไม่มีอนุมัติ
-- `ALERT_API_KEY`: random key อย่างน้อย 32 bytes เก็บ platform Secret สำหรับ caller ไม่ฝัง APK/browser
-- `FCM_DEVICE_TOKEN` และ `GOOGLE_APPLICATION_CREDENTIALS`: ตั้ง token ปัจจุบันและ **path ของ service-account JSON ที่ platform mount เป็น secret file อ่านได้โดย UID 65532** ไม่ใช่ raw JSON env/ไฟล์ใน image หากไม่มี secure mount ให้หยุดตกลงทางเลือก ไม่เปิดไฟล์แบบ world-readable
-- `HOST=0.0.0.0`, `PORT=8787`: route WebService ไปพอร์ตเดียวกัน ตั้ง resources/health checks ฝั่ง platform
-- `ACK_PUBLIC_BASE_URL`: operator ต้องตั้ง HTTPS URL ที่ Pixel เข้าถึงได้จริงผ่าน TLS/reverse proxy Go API ตรวจ routing/Ack แยก ปิด Authorization/body/access logs ที่อาจรั่ว capability ไม่เปิด HTTP listener ตรงสู่ internet
+### Web
 
-**ห้ามส่ง DB credentials/connection string ที่มีรหัสผ่าน, service-account JSON, FCM token หรือ API key ใน chat/commit** ใช้ secret manager ที่อนุมัติ การตั้ง env ไม่เท่ากับ Go→FCM→Pixel→HTTPS Ack ผ่านแล้ว หลักฐาน Pixel เดิมเป็น Node→FCM→local Ack
+- Container ใช้ `HOSTNAME=0.0.0.0`, `PORT=3010`; ตั้ง HTTPS `BACKEND_URL` และ `BACKEND_API_KEY_FILE` (หรือ `BACKEND_API_KEY` เป็นตัวเลือกสำรอง) ฝั่ง server ตาม [คู่มือ dashboard](dashboard-local-th.md) ห้ามใช้ `NEXT_PUBLIC_*` สำหรับ API key
+- Source ยังเป็น read-only loopback-Host BFF และยังไม่มี login ต้องตั้งและตรวจ authenticated ingress/private access **ก่อนให้ผู้ใช้เข้าถึงจริง** ไม่ได้อนุมัติ public unauthenticated dashboard จากการ rewrite นี้
+- การ bind 0.0.0.0 ไม่เปลี่ยน Host/Origin policy; direct external Host ยังถูกปฏิเสธ 403 ต้องตรวจ proxy/header behavior ให้เข้ากับ policy จริง และห้ามใช้การ rewrite Host เพียงอย่างเดียวแทน authentication
 
-## 5. Web runtime และ access ที่ยังคงเดิม
+## 5. ตรวจหลัง rollout และหลักฐานที่มี
 
-WebService port 3010 ใช้ `BACKEND_URL` ของ Go API แบบ HTTPS สำหรับ non-loopback และ `BACKEND_API_KEY_FILE` หรือ `BACKEND_API_KEY` **server-only runtime** ไม่ใช้ `NEXT_PUBLIC_*`/build ARG ไม่ส่ง key ให้ browser ตรวจ mount อ่านได้โดย user `node` ตาม [คู่มือ backoffice](backoffice-build-th.md)
+หลังได้รับอนุมัติและมี run จริง ให้ตรวจ tests/build/push/load/smoke, GHCR tag/digest, Nortezh revision ที่ active และ image pull/startup/logs/health/runtime ของแต่ละแอป การสร้าง revision สำเร็จไม่ใช่ health หรือ Pixel-delivery proof
 
-Source ยังคง read-only **loopback-Host BFF** ไม่มี login เพิ่ม ไม่ขยาย Host/Origin gate เพื่อ deploy Public/LAN/default external Host ยังถูกปฏิเสธ 403; bind `0.0.0.0` ใน container ไม่ใช่ authentication ต้องตั้ง authenticated ingress/private access อิสระก่อนยืนยัน `NTZ_WEB_ACCESS_PROTECTED=true` และตรวจการทำงานกับ Host/Origin policy จริง ไม่ถือว่ามี proxy แล้ว UI public-ready และไม่ใช้ header rewrite แทน authentication
+ทดสอบ synthetic alert → Pixel → human Ack → Go/PostgreSQL/HTTPS เฉพาะเมื่อได้รับอนุมัติ ใช้ incident/action ID เดิมตลอด retry และเทียบประวัติจริง ไม่ auto-Ack เมื่อตู้กลับ ON
 
-## 6. Operator checklist และหลักฐาน
+**หลักฐานของรุ่นเก่า:** main `86fbc4f` มี [API run 40633786607](https://github.com/nickza2026/nick-notify-android/actions/runs/40633786607) และ [Web run 40633786594](https://github.com/nickza2026/nick-notify-android/actions/runs/40633786594) ผ่าน tests/Docker build; Web ผ่าน Linux container smoke แต่ทั้งคู่หยุดที่ `approve-target` จึงไม่ publish/deploy ข้อความ generic exit 1 ไม่ชี้ว่าค่าใดผิด และไม่ใช่ Nortezh action ปฏิเสธงาน
 
-1. ตรวจ project/location/existing targets, ports/type, protected environments/reviewers และ GHCR pull access จริงก่อนตั้ง vars ยืนยัน
-2. อนุมัติ API DB/migration/backup/FCM mount/HTTPS Ack และ Web HTTPS backend/server-only key/access protection แยก ตั้ง runtime-ready เฉพาะหลังตรวจครบ
-3. หลัง configuration ถูกรวมเข้า `main` โดยขั้นตอน Git ที่อนุญาตแล้ว ตรวจ tests/dockerize/artifact → preflight → publish digest → exact-tag Nortezh revision ของแต่ละ app ไม่ต้องเปิด release template เพิ่ม
-4. ตรวจ revision/image digest, logs ที่ไม่รั่ว secret, `/health`, DB connection/migration, HTTPS ingress และ Web access/403; action สร้าง revision สำเร็จไม่เท่ากับบริการพร้อม
-5. ทดสอบ synthetic alert→Pixel→human Ack→Go/PostgreSQL เฉพาะเมื่อได้รับอนุมัติและมือถือดังได้ ตรวจ retry เดิมไม่นับ human action ซ้ำ dashboard ใช้ DB เดียวกัน เตรียม rollback ที่รองรับ schema จริงก่อน deploy ถัดไป
+ผลตรวจวันที่ 29 ต.ค. 2026: หลังปรับ approved action versions แล้ว `node --test tools/test-standalone-nortezh.mjs` ผ่าน 10 tests และ actionlint 1.7.12 ผ่านทั้ง API/Web/APK โดยไม่ปิดกฎ obsolete-runtime (optional shellcheck/pyflakes ไม่ได้รัน) Renderer/Docker example tests ของ skill snapshot เดิมผ่าน 25 tests รวม compiler-only synthetic Go → Linux ELF ไม่ใช่การรัน Swagger generator หรือ Docker
 
-**สถานะหลักฐาน:** main CI รุ่นก่อนแบบ build-only เคยผ่านแล้ว แต่ configuration main-delivery ใหม่นี้ **ยังไม่ได้รันบน GitHub** และงานนี้ **ยังไม่ publish image/deploy live** ยังไม่ยืนยัน existing targets/runtime/public URL/Go HTTPS Ack/Web authenticated access บน Nortezh การตรวจไฟล์ในเครื่องหรือผล CI เดิมไม่ใช่ deployment verification
+ก่อนแก้ actionlint พบ obsolete-runtime 10 จุด และตรวจ official action.yml เพิ่มพบ lowercase action ใช้ Node 16 เช่นกัน ผู้ใช้อนุมัติวันที่ 29 ต.ค. 2026 ให้เปลี่ยนเฉพาะหก versions เป็น Node 20 ตามลำดับข้างต้นแล้ว ส่วน Nortezh `v1.0.5` คงเดิม บันทึก `actionVersionOverrides` ใน manifest และให้ project regression ตรวจเฉพาะ allowlist นี้ ไม่แก้ installed skill/template/golden fixtures หรือเปลี่ยนโครงสอง jobs การเปลี่ยน action runtime ไม่เปลี่ยน Node 22.23.4 ของ application และการผ่าน lint ไม่ใช่หลักฐานว่า GitHub/platform รันสำเร็จจริง
+
+Docker Linux engine ยังไม่พร้อม จึงยังไม่ได้ build/smoke image รุ่นนี้ในเครื่อง และยังไม่ได้ push/รัน GitHub workflows/publish image/deploy จริง ไม่มี provider acceptance, live runtime หรือ Pixel → Go HTTPS Ack assurance จากงานนี้

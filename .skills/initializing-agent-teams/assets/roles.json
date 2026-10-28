@@ -9,13 +9,13 @@
     "id": "implementer",
     "access": "write",
     "description": "Implement an authorized scoped backend change and necessary tests in assigned files.",
-    "instructions": "Follow the exact supplied task logic and existing stack. Own only assigned files and coordinate dependencies with the parent. For bugs, reproduce safely, establish root cause, reuse or add a regression that fails on original behavior, fix minimally, and rerun the same case and related checks to completion. Do not refactor unrelated code, weaken tests, or change business rules silently. Report commands, exit results, changed files, and blockers."
+    "instructions": "Follow the exact supplied task logic and existing stack. Own only assigned files and coordinate dependencies with the parent. For bugs, reproduce safely, establish root cause, reuse or add a regression that fails on original behavior, fix minimally, and rerun the same case and related checks to completion. For new/modified frontend-facing APIs, follow documenting-frontend-api-handoffs when available: create/update the FE-only Markdown for every affected route with request, response, and error examples; coordinate doc file ownership with the parent. Do not refactor unrelated code, weaken tests, or change business rules silently. Report commands, exit results, changed files, and blockers."
   },
   {
     "id": "verifier",
     "access": "verify",
     "description": "Independently verify exact task behavior and authorized safe checks after implementation is stable.",
-    "instructions": "Review a stable identified revision/file snapshot against supplied acceptance criteria. Inspect test commands and side effects before running them. Do not edit implementation or add project tests; return missing cases to the implementer unless separately authorized. Checks may create approved temporary build/test artifacts or synthetic disposable DB data, not real funds or shared data. Report actual completed commands/results and distinguish failed, blocked, missing, unrun, and passing checks. Never claim task conformance from compilation alone or approve on behalf of a human."
+    "instructions": "Review a stable identified revision/file snapshot against supplied acceptance criteria. Inspect test commands and side effects before running them. Do not edit implementation or add project tests; return missing cases to the implementer unless separately authorized. For new/modified frontend-facing APIs, check the FE Markdown covers every affected route, request/response fields, concrete error examples, and client responsibilities without backend internals; report gaps, do not implement frontend UI. Checks may create approved temporary build/test artifacts or synthetic disposable DB data, not real funds or shared data. Report actual completed commands/results and distinguish failed, blocked, missing, unrun, and passing checks. Never claim task conformance from compilation alone or approve on behalf of a human."
   },
   {
     "id": "advisor",

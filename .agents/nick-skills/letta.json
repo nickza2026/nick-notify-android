@@ -21,8 +21,8 @@
   "source": {
     "kind": "github",
     "repository": "nickza2026/nick-skills",
-    "ref": "7967e6f7112a97cbf2262ea50665a9ba2739d3ca",
-    "baseUrl": "https://raw.githubusercontent.com/nickza2026/nick-skills/7967e6f7112a97cbf2262ea50665a9ba2739d3ca"
+    "ref": "4a70d2fa56ad0257b0f728fa594e86da468d8f6f",
+    "baseUrl": "https://raw.githubusercontent.com/nickza2026/nick-skills/4a70d2fa56ad0257b0f728fa594e86da468d8f6f"
   },
   "remoteAvailability": "not-checked",
   "rendererSnapshotMatch": "not-checked",
@@ -58,7 +58,7 @@
     },
     {
       "path": "AGENTS.md",
-      "contentHash": "271ca66ff75627912e57acf8d6b90118d5d0af31992cad34c2826f78eea61074"
+      "contentHash": "20b57286a77939ca487eac6c995dc40bbfd84487d6d382615d581bb86c6388e6"
     }
   ]
 }

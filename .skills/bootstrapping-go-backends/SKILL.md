@@ -60,7 +60,11 @@ Wire each application's actual config, database dependencies, migration role, mi
 
 Implement a small feature relevant to the requested application: typed inputs/results, validation and authorization, operation/query, route or job registration, schema when necessary, tests, and the applicable contract documentation. Avoid ceremonial controller/service/repository/interface layers without a real responsibility.
 
+When changing schema, follow [migration authoring and immutability](references/database-and-testing.md#embedded-migration-runner): normally keep one numbered SQL migration file per delivery commit rather than creating a new version for each edit. Amend an existing uncommitted, unapplied draft instead of proliferating files; never infer "unapplied" from Git status alone. Code, tests, and documentation may still share that commit.
+
 For HTTP applications, define the wire format using the [API reference](references/api-contracts.md). For background work, define retry, idempotency, and transaction boundaries. Do not treat a DB in context as an automatically open transaction.
+
+For every new/modified frontend-facing API, use [documenting-frontend-api-handoffs](../documenting-frontend-api-handoffs/SKILL.md) to create/update a feature `.md` covering all affected routes, request/response field references and examples, error JSON/statuses, permissions, and FE integration responsibilities only. Include indirect shared-contract changes; Swagger alone does not replace this handoff.
 
 For browsable lists, implement validated client-selected sorting and a deterministic default unless an explicitly documented fixed domain order is required. Select pagination per workload: exact totals are optional, not mandatory. Use count-free next-page navigation where totals are unnecessary; do not add a full count query merely because a source wrapper exposes total fields. Follow the user's contract examples rather than fixing pagination key names globally.
 

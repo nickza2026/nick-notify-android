@@ -28,6 +28,21 @@ test('exactly seven distinct prefixed backend roles, including DB/security', () 
   assert.equal(roles.find(role => role.id === 'security-reviewer').access, 'read');
 });
 
+test('all adapters carry FE handoff duties without giving verifier write authority', () => project(root => {
+  for (const harness of ['cursor', 'codex', 'claude', 'letta', 'pi']) {
+    const plan = makePlan(options(root, harness));
+    const implementation = plan.files.find(file => file.relative.includes('nick-implementer.')).content;
+    const verification = plan.files.find(file => file.relative.includes('nick-verifier.')).content;
+    assert.ok(implementation.includes('documenting-frontend-api-handoffs'));
+    assert.ok(implementation.includes('request, response, and error examples'));
+    assert.ok(implementation.includes('coordinate doc file ownership'));
+    assert.ok(verification.includes('check the FE Markdown covers every affected route'));
+    assert.ok(verification.includes('report gaps, do not implement frontend UI'));
+    assert.ok(verification.includes('Do not edit implementation'));
+  }
+  assert.deepEqual(fs.readdirSync(root), []);
+}));
+
 for (const harness of ['cursor', 'codex', 'claude', 'letta', 'pi']) {
   test(`${harness}: dry-run renders selected adapter only and writes nothing`, () => project(root => {
     const plan = makePlan(options(root, harness));
@@ -121,6 +136,79 @@ test('explicit model IDs are serialized without pretending availability', () => 
     assert.ok(scout.includes('"fixture/model-v1"'));
     assert.equal(plan.models.implementer, 'inherit');
   }
+}));
+
+test('Codex optional per-role reasoning emits only confirmed TOML fields', () => project(root => {
+  const reasoning = { scout: 'medium', implementer: 'medium', verifier: 'high', 'db-reviewer': 'low' };
+  const plan = makePlan(options(root, 'codex', { models: { scout: 'fixture/model-v1' }, reasoning }));
+  const scout = plan.files.find(file => file.relative.endsWith('nick-scout.toml')).content;
+  const verifier = plan.files.find(file => file.relative.endsWith('nick-verifier.toml')).content;
+  const advisor = plan.files.find(file => file.relative.endsWith('nick-advisor.toml')).content;
+  assert.match(scout, /model = "fixture\/model-v1"\nmodel_reasoning_effort = "medium"/);
+  assert.match(verifier, /model_reasoning_effort = "high"/);
+  assert.doesNotMatch(advisor, /model_reasoning_effort/);
+  assert.doesNotMatch(makePlan(options(root, 'codex')).files.find(file => file.relative.endsWith('nick-scout.toml')).content, /model_reasoning_effort/);
+  const state = JSON.parse(plan.files.find(file => file.relative === '.agents/nick-skills/codex.json').content);
+  assert.deepEqual(state.reasoning, reasoning);
+  assert.deepEqual(fs.readdirSync(root), []);
+}));
+
+test('Codex example recommends Astra with high reasoning for advisor, DB, and security', () => project(root => {
+  const assets = path.resolve(path.dirname(script), '../assets/codex-reasoning.example.json');
+  const guide = path.resolve(path.dirname(script), '../references/codex-model-example.md');
+  const reasoning = JSON.parse(fs.readFileSync(assets, 'utf8'));
+  const text = fs.readFileSync(guide, 'utf8');
+  for (const role of ['advisor', 'db-reviewer', 'security-reviewer']) {
+    assert.equal(reasoning[role], 'high');
+    assert.ok(text.includes(`| \`${role}\` | GPT-6 Astra | high |`));
+  }
+  assert.deepEqual(fs.readdirSync(root), []);
+}));
+
+test('Cursor example recommends Opus 5.5 high for advisory roles only', () => project(root => {
+  const guide = path.resolve(path.dirname(script), '../references/cursor-model-example.md');
+  const text = fs.readFileSync(guide, 'utf8');
+  for (const role of ['advisor', 'db-reviewer', 'security-reviewer']) {
+    assert.ok(text.includes(`| \`${role}\` | Opus 5.5 | high |`));
+  }
+  const model = 'fixture/cursor-opus-5.5[effort=high]';
+  const plan = makePlan(options(root, 'cursor', { models: Object.fromEntries(['advisor', 'db-reviewer', 'security-reviewer'].map(role => [role, model])) }));
+  for (const role of ['advisor', 'db-reviewer', 'security-reviewer']) {
+    const file = plan.files.find(item => item.relative.endsWith(`nick-${role}.md`));
+    assert.ok(file.content.includes(`model: "${model}"`));
+    assert.ok(file.content.includes('readonly: true'));
+  }
+  assert.ok(plan.files.find(file => file.relative.endsWith('nick-scout.md')).content.includes('model: "inherit"'));
+  assert.deepEqual(fs.readdirSync(root), []);
+}));
+
+test('non-Codex adapters and unsupported efforts reject reasoning without writes', () => project(root => {
+  for (const harness of ['cursor', 'claude', 'letta', 'pi']) {
+    assert.throws(() => makePlan(options(root, harness, { reasoning: { scout: 'medium' } })), /Codex adapter/);
+  }
+  for (const reasoning of [null, [], { stranger: 'high' }, { scout: 'ultra' }, { scout: 'inherit' }, { scout: 1 }]) {
+    assert.throws(() => makePlan(options(root, 'codex', { reasoning })));
+  }
+  assert.deepEqual(fs.readdirSync(root), []);
+}));
+
+test('approved Codex reasoning is idempotent and changed effort conflicts', () => project(root => {
+  const opts = options(root, 'codex', { reasoning: { verifier: 'high' } });
+  applyPlan(makePlan(opts), approved);
+  assert.deepEqual(applyPlan(makePlan(opts), approved), []);
+  const original = read(root, '.codex/agents/nick-verifier.toml');
+  const changed = makePlan(options(root, 'codex', { reasoning: { verifier: 'medium' } }));
+  assert.throws(() => applyPlan(changed, approved), /Conflicts/);
+  assert.equal(read(root, '.codex/agents/nick-verifier.toml'), original);
+}));
+
+test('real CLI reads approved reasoning-map file in dry-run only', () => project(root => {
+  const filename = path.join(root, 'role-efforts.json');
+  fs.writeFileSync(filename, '{"scout":"medium","verifier":"high"}\n');
+  const result = spawnSync(process.execPath, [script, '--project', root, '--harness', 'codex', '--reasoning', filename], { encoding: 'utf8', timeout: 15000 });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout).reasoning, { scout: 'medium', verifier: 'high' });
+  assert.deepEqual(fs.readdirSync(root), ['role-efforts.json']);
 }));
 
 test('changed models conflict rather than silently replacing accepted choices', () => project(root => {

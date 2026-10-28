@@ -1,0 +1,158 @@
+name: Deploy Notify API To Production
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/api-production.yaml"
+      - "backend/**"
+      - "Dockerfile.go"
+      - "Dockerfile.go.dockerignore"
+      - "tools/test-standalone-nortezh.mjs"
+      - "docs/deployment/nortezh-workflows.json"
+      - ".skills/deploying-go-to-nortezh/scripts/render-workflows.mjs"
+      - ".skills/deploying-go-to-nortezh/assets/workflow-service.yaml.tmpl"
+
+concurrency:
+  group: notify-api-production-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'push' || github.ref != 'refs/heads/main' }}
+
+jobs:
+  dockerize_n_push:
+    name: Dockerize & Push
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Set outputs
+        id: short_sha
+        run: echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+      - name: Validate source event
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$GITHUB_EVENT_NAME:$GITHUB_REF" in
+            push:refs/heads/main|workflow_dispatch:refs/heads/*) ;;
+            *) echo '::error::Only main pushes or manual branch builds are supported.'; exit 1 ;;
+          esac
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.23.4
+      - name: Test workflow contracts
+        run: node --test tools/test-standalone-nortezh.mjs
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/.cache/notify-alarm/embedded-postgres
+          key: embedded-postgres-${{ runner.os }}-${{ hashFiles('backend/go.sum') }}
+      - name: Test Go API with isolated database
+        working-directory: backend
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
+          go build ./...
+          go vet ./...
+          go test ./... -count=1 -timeout=8m
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Log in to GitHub Docker Registry
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: lowercase repository
+        id: repository
+        uses: ASzc/change-string-case-action@v6
+        with:
+          string: ${{ github.repository }}/notify-api
+      - name: Build container image
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          platforms: linux/amd64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          pull: true
+          push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          load: true
+          context: .
+          file: ./Dockerfile.go
+          tags: |
+            ghcr.io/${{ steps.repository.outputs.lowercase }}:${{ steps.short_sha.outputs.sha_short }}
+      - name: Verify application container
+        shell: bash
+        env:
+          IMAGE: ghcr.io/${{ steps.repository.outputs.lowercase }}:${{ steps.short_sha.outputs.sha_short }}
+        run: |
+          set -euo pipefail
+          test "$(docker image inspect "$IMAGE" --format '{{.Config.User}}')" = '65532:65532'
+      - name: Set output variables
+        id: notify_api
+        shell: bash
+        env:
+          PUBLISHED: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          if [[ "$PUBLISHED" == true ]]; then [[ "$DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]]; fi
+          echo "image_name=ghcr.io/${{ steps.repository.outputs.lowercase }}:${{ steps.short_sha.outputs.sha_short }}" >> $GITHUB_OUTPUT
+          if [[ "$PUBLISHED" == true ]]; then
+            printf 'Published image digest: %s\nVerify the active revision and runtime separately.\n' "$DIGEST" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo 'Manual build only: image not published; deployment skipped.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+    outputs:
+      image_name: ${{ steps.notify_api.outputs.image_name}}
+  deploy:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: dockerize_n_push
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions: {}
+    environment: notify-api-production
+    steps:
+      - name: Validate Nortezh secrets
+        shell: bash
+        env:
+          NTZ_SA_EMAIL: ${{ secrets.NTZ_SA_EMAIL }}
+          NTZ_SA_KEY: ${{ secrets.NTZ_SA_KEY }}
+        run: |
+          set -euo pipefail
+          missing=0
+          for name in NTZ_SA_EMAIL NTZ_SA_KEY; do
+            if [[ -z "${!name-}" ]]; then
+              printf '::error::Secret %s is missing in environment notify-api-production.\n' "$name" >&2
+              missing=1
+            fi
+          done
+          [[ "$missing" == 0 ]]
+      - uses: Nortezh/nortezh-action@v1.0.5
+        with:
+          action: deployment.create-revision
+          project: internal-tools
+          location: olufy-0
+          name: notify-alarm-api
+          image: ${{ needs.dockerize_n_push.outputs.image_name }}
+          type: WebService
+          port: 8787
+        env:
+          SA_AUTH_EMAIL: ${{ secrets.NTZ_SA_EMAIL }}
+          SA_AUTH_KEY: ${{ secrets.NTZ_SA_KEY }}

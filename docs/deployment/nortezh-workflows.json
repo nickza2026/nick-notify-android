@@ -1,0 +1,66 @@
+{
+  "templateCommit": "4a70d2fa56ad0257b0f728fa594e86da468d8f6f",
+  "mode": "reviewed-template-adaptation",
+  "actionVersionOverrides": {
+    "actions/checkout@v3": "actions/checkout@v4",
+    "docker/setup-qemu-action@v2": "docker/setup-qemu-action@v3",
+    "docker/setup-buildx-action@v2": "docker/setup-buildx-action@v3",
+    "docker/login-action@v2": "docker/login-action@v3",
+    "docker/build-push-action@v4": "docker/build-push-action@v6",
+    "ASzc/change-string-case-action@v5": "ASzc/change-string-case-action@v6"
+  },
+  "policy": {
+    "productionOnly": true,
+    "prTests": false,
+    "manual": "build-only",
+    "mainDeploymentCancellation": false
+  },
+  "workflows": [
+    {
+      "file": "api-production.yaml",
+      "name": "Deploy Notify API To Production",
+      "app": "api",
+      "environment": "production",
+      "githubEnvironment": "notify-api-production",
+      "imageSuffix": "notify-api",
+      "outputId": "notify_api",
+      "dockerfile": "./Dockerfile.go",
+      "context": ".",
+      "trigger": { "kind": "push", "branch": "main", "manual": true },
+      "paths": [
+        ".github/workflows/api-production.yaml",
+        "backend/**",
+        "Dockerfile.go",
+        "Dockerfile.go.dockerignore",
+        "tools/test-standalone-nortezh.mjs",
+        "docs/deployment/nortezh-workflows.json",
+        ".skills/deploying-go-to-nortezh/scripts/render-workflows.mjs",
+        ".skills/deploying-go-to-nortezh/assets/workflow-service.yaml.tmpl"
+      ],
+      "nortezh": { "project": "internal-tools", "location": "olufy-0", "name": "notify-alarm-api", "type": "WebService", "port": 8787 },
+      "secrets": { "email": "NTZ_SA_EMAIL", "key": "NTZ_SA_KEY" }
+    },
+    {
+      "file": "web-production.yaml",
+      "name": "Deploy Notify Web To Production",
+      "app": "web",
+      "environment": "production",
+      "githubEnvironment": "notify-web-production",
+      "imageSuffix": "notify-web",
+      "outputId": "notify_web",
+      "dockerfile": "./dashboard/Dockerfile",
+      "context": "./dashboard",
+      "trigger": { "kind": "push", "branch": "main", "manual": true },
+      "paths": [
+        ".github/workflows/web-production.yaml",
+        "dashboard/**",
+        "tools/test-standalone-nortezh.mjs",
+        "docs/deployment/nortezh-workflows.json",
+        ".skills/deploying-go-to-nortezh/scripts/render-workflows.mjs",
+        ".skills/deploying-go-to-nortezh/assets/workflow-service.yaml.tmpl"
+      ],
+      "nortezh": { "project": "internal-tools", "location": "olufy-0", "name": "notify-alarm-web", "type": "WebService", "port": 3010 },
+      "secrets": { "email": "NTZ_SA_EMAIL", "key": "NTZ_SA_KEY" }
+    }
+  ]
+}

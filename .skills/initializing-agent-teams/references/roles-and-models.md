@@ -20,6 +20,9 @@ The helper's portable fallback is inheritance, not a claim that one model is opt
 
 Do not fabricate a live model list from screenshots, prior defaults, or configured-but-unavailable profiles. Use the actual client/catalog or ask for the user's available choices. If unavailable, explain inheritance rather than inventing a model or silently selecting a paid/provider-changing fallback. Native model parameters differ; do not append a universal "medium" suffix or write unsupported effort settings.
 
+For an illustrative seven-role Codex table with separate reasoning proposals, read [the Codex and Letta-with-Codex example](codex-model-example.md). It is not an availability check or a benchmark result.
+For Cursor, recommend [Opus 5.5 at high reasoning for advisor, DB, and security reviewers](cursor-model-example.md) after checking its actual available model ID and option support; the other roles retain their normal per-task recommendations.
+
 Ask once with a recommended preset rather than seven separate questions. Store confirmed choices in the generated per-harness manifest. A later unavailable model, changed preset, or conflicting config needs a specific decision; do not auto-upgrade or rewrite the file.
 
 ## Efficient task handoffs
