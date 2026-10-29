@@ -46,12 +46,24 @@ func Open(ctx context.Context, url string) (*sql.DB, error) {
 	return db, nil
 }
 func Migrate(ctx context.Context, db *sql.DB) error {
-	b, e := migrations.ReadFile("migrations/001_init.sql")
+	tx, e := db.BeginTx(ctx, nil)
 	if e != nil {
 		return e
 	}
-	_, e = db.ExecContext(ctx, string(b))
-	return e
+	defer tx.Rollback()
+	if _, e = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(739148521)`); e != nil {
+		return e
+	}
+	for _, name := range []string{"001_init.sql", "002_dashboard_auth.sql"} {
+		b, err := migrations.ReadFile("migrations/" + name)
+		if err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, string(b)); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 type Alert struct {

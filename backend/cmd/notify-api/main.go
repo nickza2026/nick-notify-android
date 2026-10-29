@@ -41,6 +41,9 @@ func run() error {
 		return errors.New("PostgreSQL startup failed (check DATABASE_URL and migrations; credentials not logged)")
 	}
 	defer db.Close()
+	if e = backend.BootstrapDashboard(ctx, db, os.Getenv("DASHBOARD_ADMIN_USERNAME"), os.Getenv("DASHBOARD_BOOTSTRAP_PASSWORD")); e != nil {
+		return errors.New("dashboard bootstrap failed (check configuration; credentials not logged)")
+	}
 	var sender backend.Sender
 	if os.Getenv("GOOGLE_APPLICATION_CREDENTIALS") != "" && os.Getenv("FCM_DEVICE_TOKEN") != "" {
 		sender, e = backend.NewFCM(os.Getenv("GOOGLE_APPLICATION_CREDENTIALS"), os.Getenv("FCM_DEVICE_TOKEN"))

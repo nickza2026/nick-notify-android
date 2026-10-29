@@ -1,10 +1,9 @@
-import { invalidQuery, invalidOrigin, upstream } from '@/lib/backend';
-import { localDashboardRequest } from '@/lib/protocol';
+import { invalidQuery, guard, upstream } from '@/lib/backend';
 
 export const dynamic = 'force-dynamic';
 export async function GET(request: Request, context: { params: Promise<{ id: string }> }): Promise<Response> {
-  if (!localDashboardRequest(request)) return invalidOrigin();
+  const rejected = guard(request); if (rejected) return rejected;
   const { id } = await context.params;
   if (!/^[A-Za-z0-9_-]{1,100}$/.test(id)) return invalidQuery();
-  return upstream(`/v1/alerts/${encodeURIComponent(id)}`);
+  return upstream(request, `/v1/dashboard/alerts/${encodeURIComponent(id)}`);
 }

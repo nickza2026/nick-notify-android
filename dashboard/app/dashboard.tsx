@@ -1,19 +1,20 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { clientJSON } from '@/lib/client';
+import { beginNextPage, finishNextPage, historyGeneration, historyReady } from '@/lib/history-pagination';
 import { ackLabel, bangkokDate, count, dateBounds, formatTime, importanceLabel, providerLabel, statuses, type AlertDetail, type AlertSummary, type HistoryResponse, type Importance, type StatsResponse, type StatusFilter } from '@/lib/protocol';
 
 type Filter = { from: string; to: string; status: StatusFilter };
 type LoadState = 'loading' | 'ready' | 'error';
+type HistoryLoadState = LoadState | 'page-error';
 const statusNames: Record<StatusFilter, string> = {
   all: 'ทุกสถานะ', provider_accepted: 'ผู้ให้บริการรับคำขอแล้ว', provider_failed: 'ผู้ให้บริการปฏิเสธ',
   delivery_unknown: 'ไม่ทราบผลส่ง', acknowledged: 'มีรายงานแตะรับทราบ', pending_ack: 'รอรายงานแตะรับทราบ',
 };
 
 async function getJSON<T>(url: string, signal?: AbortSignal): Promise<T> {
-  const response = await fetch(url, { cache: 'no-store', signal });
-  if (!response.ok) throw new Error(response.status === 401 ? 'ไม่มีสิทธิ์ดูประวัติ' : 'โหลดข้อมูลไม่สำเร็จ กรุณาลองอีกครั้ง');
-  return response.json() as Promise<T>;
+  return clientJSON<T>(url, undefined, undefined, signal);
 }
 
 function Time({ value }: { value: string | null | undefined }) {
@@ -88,7 +89,7 @@ export default function Dashboard({ demo }: { demo: boolean }) {
   const [filterError, setFilterError] = useState('');
   const [items, setItems] = useState<AlertSummary[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
-  const [historyState, setHistoryState] = useState<LoadState>('loading');
+  const [historyState, setHistoryState] = useState<HistoryLoadState>('loading');
   const [historyError, setHistoryError] = useState('');
   const [stats, setStats] = useState<StatsResponse | null>(null);
   const [statsState, setStatsState] = useState<LoadState>('loading');
@@ -98,19 +99,26 @@ export default function Dashboard({ demo }: { demo: boolean }) {
   const [generation, setGeneration] = useState(0);
   const previousFocus = useRef<HTMLElement | null>(null);
   const seq = useRef(0);
+  const pagination = useRef(historyGeneration(0));
 
-  const refresh = useCallback(() => { seq.current++; setGeneration((value) => value + 1); }, []);
+  const refresh = useCallback(() => {
+    pagination.current = historyGeneration(++seq.current);
+    setGeneration((value) => value + 1);
+  }, []);
   useEffect(() => {
     const sequence = ++seq.current;
+    pagination.current = historyGeneration(sequence);
     const bounds = dateBounds(filter.from, filter.to);
     if (!bounds) return;
     const query = new URLSearchParams({ ...bounds, status: filter.status, limit: '25' });
     setHistoryState('loading'); setStatsState('loading'); setHistoryError(''); setStatsError('');
     getJSON<HistoryResponse>(`/api/history?${query}`).then((data) => {
       if (sequence !== seq.current) return;
+      pagination.current = historyReady(sequence, data.next_cursor);
       setItems(data.items); setCursor(data.next_cursor); setHistoryState('ready'); setLastFetched(new Date().toISOString());
     }).catch((cause: unknown) => {
       if (sequence !== seq.current) return;
+      pagination.current = { ...historyGeneration(sequence), phase: 'initial-error' };
       setHistoryError(cause instanceof Error ? cause.message : 'โหลดรายการไม่สำเร็จ'); setHistoryState('error');
     });
     getJSON<StatsResponse>(`/api/stats?${new URLSearchParams(bounds)}`).then((data) => {
@@ -123,18 +131,23 @@ export default function Dashboard({ demo }: { demo: boolean }) {
   }, [filter, generation]);
 
   async function loadMore() {
-    if (!cursor || historyState !== 'ready') return;
     const sequence = seq.current;
     const bounds = dateBounds(filter.from, filter.to);
     if (!bounds) return;
+    const next = beginNextPage(pagination.current, sequence);
+    if (!next) return;
+    // Synchronous ref transition excludes duplicate clicks before React rerenders.
+    pagination.current = next;
     setHistoryState('loading'); setHistoryError('');
     try {
-      const data = await getJSON<HistoryResponse>(`/api/history?${new URLSearchParams({ ...bounds, status: filter.status, limit: '25', cursor })}`);
+      const data = await getJSON<HistoryResponse>(`/api/history?${new URLSearchParams({ ...bounds, status: filter.status, limit: '25', cursor: next.cursor! })}`);
       if (sequence !== seq.current) return;
+      pagination.current = finishNextPage(pagination.current, sequence, data.next_cursor);
       setItems((old) => [...old, ...data.items]); setCursor(data.next_cursor); setHistoryState('ready'); setLastFetched(new Date().toISOString());
     } catch (cause) {
       if (sequence !== seq.current) return;
-      setHistoryError(cause instanceof Error ? cause.message : 'โหลดรายการเพิ่มเติมไม่สำเร็จ'); setHistoryState('error');
+      pagination.current = finishNextPage(pagination.current, sequence, null, true);
+      setHistoryError(cause instanceof Error ? cause.message : 'โหลดรายการเพิ่มเติมไม่สำเร็จ'); setHistoryState('page-error');
     }
   }
 
@@ -158,7 +171,7 @@ export default function Dashboard({ demo }: { demo: boolean }) {
     <section className="filter-panel" aria-label="ตัวกรองรายการ"><form onSubmit={applyFilters}><div className="filter-fields"><label>ตั้งแต่วันที่ <input type="date" value={draftFrom} onChange={(event) => setDraftFrom(event.target.value)} required /></label><label>ถึงวันที่ <input type="date" value={draftTo} onChange={(event) => setDraftTo(event.target.value)} required /></label><label>สถานะรายการ <select value={draftStatus} onChange={(event) => setDraftStatus(event.target.value as StatusFilter)}>{statuses.map((status) => <option value={status} key={status}>{statusNames[status]}</option>)}</select></label></div><div className="filter-actions"><button type="submit" className="primary-button">ใช้ตัวกรอง</button><button type="button" className="secondary-button" onClick={clearFilters}>ล้างตัวกรอง</button></div>{filterError && <p role="alert" className="error">{filterError}</p>}</form></section>
     <Summary stats={stats} state={statsState} error={statsError} />
     <section className="section history-section" aria-labelledby="history-title"><div className="section-heading"><div><h2 id="history-title">รายการแจ้งเตือน</h2><p>เรียงจากใหม่ไปเก่า · {statusNames[filter.status]}</p></div><span className="loaded-count" aria-live="polite">{historyState === 'loading' && items.length === 0 ? 'กำลังโหลดรายการ…' : `โหลดแล้ว ${count(items.length)} รายการ`}</span></div>
-      {historyState === 'error' && <p role="alert" className="error">{historyError}{items.length > 0 && ' — แสดงรายการเดิมซึ่งอาจไม่เป็นปัจจุบัน'}</p>}
+      {(historyState === 'error' || historyState === 'page-error') && <p role="alert" className="error">{historyError}{items.length > 0 && ' — แสดงรายการเดิมซึ่งอาจไม่เป็นปัจจุบัน'}</p>}
       {historyState === 'loading' && items.length === 0 ?
         <div className="loading-list" role="status" aria-label="กำลังโหลดรายการ"><div className="skeleton" /><div className="skeleton" /><div className="skeleton" /></div> :
         items.length === 0 && historyState === 'ready' ?
@@ -178,7 +191,7 @@ export default function Dashboard({ demo }: { demo: boolean }) {
                 previousFocus.current = event.currentTarget; setSelectedId(item.alert_id);
               }}>ดูรายละเอียด<span className="sr-only"> {item.title}</span></button></td>
             </tr>)}</tbody></table></div>}
-      {cursor && items.length > 0 && <div className="load-more"><button type="button" className="secondary-button" onClick={loadMore} disabled={historyState === 'loading'}>{historyState === 'loading' ? 'กำลังโหลด…' : 'โหลดเพิ่มเติม'}</button></div>}
+      {cursor && items.length > 0 && <div className="load-more"><button type="button" className="secondary-button" onClick={loadMore} disabled={historyState === 'loading' || historyState === 'error'}>{historyState === 'loading' ? 'กำลังโหลด…' : historyState === 'page-error' ? 'ลองโหลดเพิ่มเติมอีกครั้ง' : 'โหลดเพิ่มเติม'}</button></div>}
     </section>
     {selectedId && <Detail id={selectedId} onClose={closeDetail} />}
   </main>;

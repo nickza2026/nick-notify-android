@@ -1,9 +1,9 @@
-import { historyQuery, localDashboardRequest } from '@/lib/protocol';
-import { invalidQuery, invalidOrigin, upstream } from '@/lib/backend';
+import { historyQuery } from '@/lib/protocol';
+import { invalidQuery, guard, upstream } from '@/lib/backend';
 
 export const dynamic = 'force-dynamic';
 export async function GET(request: Request): Promise<Response> {
-  if (!localDashboardRequest(request)) return invalidOrigin();
+  const rejected = guard(request); if (rejected) return rejected;
   const query = historyQuery(new URL(request.url).searchParams);
-  return query ? upstream('/v1/history', query) : invalidQuery();
+  return query ? upstream(request, '/v1/dashboard/history', query) : invalidQuery();
 }

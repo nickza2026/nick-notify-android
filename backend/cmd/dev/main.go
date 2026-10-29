@@ -76,6 +76,9 @@ func run() error {
 		return errors.New("demo database initialization failed")
 	}
 	defer db.Close()
+	if e = backend.BootstrapDashboard(ctx, db, os.Getenv("DASHBOARD_ADMIN_USERNAME"), os.Getenv("DASHBOARD_BOOTSTRAP_PASSWORD")); e != nil {
+		return errors.New("dashboard bootstrap failed (check configuration; credentials not logged)")
+	}
 	key := os.Getenv("ALERT_API_KEY")
 	if key == "" {
 		key = "synthetic_demo_api_key_not_for_production_0001"
