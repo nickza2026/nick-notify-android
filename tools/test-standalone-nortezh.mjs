@@ -182,7 +182,7 @@ test('job image output follows short-SHA template; manual is not publication and
   }
 });
 
-test('application tests precede build/push, Web smoke still rejects foreign Host, no runtime changes', () => {
+test('application tests precede build/push, Web smoke rejects foreign Host and retains runtime pins', () => {
   const api = job(read('api-production.yaml'), 'dockerize_n_push');
   const web = job(read('web-production.yaml'), 'dockerize_n_push');
   assert.match(api, /go test \.\/\.\.\. -count=1 -timeout=8m/);
@@ -197,6 +197,16 @@ test('application tests precede build/push, Web smoke still rejects foreign Host
   for (const path of ['api-ci.yaml', 'web-ci.yaml', 'deliver-go.yml', 'deliver-notify-api-nortezh.yml']) {
     assert.equal(existsSync(new URL(`../.github/workflows/${path}`, import.meta.url)), false);
   }
+});
+
+test('Web container smoke checks login and denies unauthenticated reads/send without backend secrets', () => {
+  const script = scriptOf(read('web-production.yaml'), 'dockerize_n_push', 'Verify application container');
+  assert.match(script, /DASHBOARD_PUBLIC_URL=http:\/\/127\.0\.0\.1:3010/);
+  assert.match(script, /curl --fail --silent http:\/\/127\.0\.0\.1:3010\/login/);
+  assert.ok((script.match(/test "\$status" = 401/g) ?? []).length >= 2);
+  assert.match(script, /X-Notify-Request: dashboard/);
+  assert.match(script, /\/api\/test-alerts/);
+  assert.doesNotMatch(script, /BACKEND_API_KEY|FCM_DEVICE_TOKEN|GOOGLE_APPLICATION_CREDENTIALS/);
 });
 
 test('APK stays manual-only with signed main job and signer verification unchanged', () => {

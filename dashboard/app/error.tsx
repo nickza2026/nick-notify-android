@@ -1,0 +1,2 @@
+'use client';
+export default function ErrorPage({reset}:{reset:()=>void}){return <main className="auth-page"><section className="auth-card"><h1>ระบบไม่พร้อมใช้งาน</h1><p role="alert">ไม่สามารถตรวจสอบ session หรือการตั้งค่าเซิร์ฟเวอร์ได้ ไม่มีการเปิดข้อมูลข้ามการยืนยันตัวตน</p><button className="primary-button" onClick={reset}>ลองอีกครั้ง</button><p><a href="/login">กลับเข้าสู่ระบบ</a></p></section></main>;}

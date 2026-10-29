@@ -25,7 +25,7 @@ Manual run รับเฉพาะ branch ทำ **tests/build/load เท่�
    - Web: pnpm 10.33.0, frozen install, Next typegen/typecheck/tests/build
 2. คง action/order หลักตาม template พร้อม compatibility override หกรายการที่ผู้ใช้อนุมัติ: `actions/checkout@v4` → `docker/setup-qemu-action@v3` → `docker/setup-buildx-action@v3` → `docker/login-action@v3` → `ASzc/change-string-case-action@v6` → `docker/build-push-action@v6` → `Nortezh/nortezh-action@v1.0.5` (action สุดท้ายอยู่ deploy) เหล่านี้เป็น version tags **ไม่ใช่ SHA-pinned versions**; steps ทดสอบที่เพิ่มอยู่ก่อน login
 3. Build `linux/amd64` พร้อม Buildx GHA cache; API ใช้ context `.`/root `Dockerfile.go`; Web ใช้ context `./dashboard`/`./dashboard/Dockerfile` Login และ push เฉพาะ main push; build-push **build, push และ load output เดียวกัน** ไม่ export image tar หรือ Actions image artifact (APK artifacts คงเดิม)
-4. หลัง build+push ก่อนส่ง outputs/deploy: API inspect user `65532:65532`; Web ตรวจ user `node` และ smoke แบบ bounded ที่ `127.0.0.1:3010` หน้า `/` สำเร็จ, BFF invalid query/ID 400 และ foreign Host 403 โดยไม่ใช้ backend credentials **หาก smoke ล้ม image อาจอยู่ใน GHCR แล้ว แต่ deploy ถูกบล็อก** ไม่ใช่ pre-publication gate
+4. หลัง build+push ก่อนส่ง outputs/deploy: API inspect user `65532:65532`; Web ตรวจ user `node` และ smoke แบบ bounded ที่ `127.0.0.1:3010` โดยตั้ง canonical loopback URL เฉพาะ test ตรวจ `/login` สำเร็จ, protected read/send ที่ไม่มี session ได้ 401 และ foreign Host ได้ 403 ไม่ใช้ backend/provider credentials **หาก smoke ล้ม image อาจอยู่ใน GHCR แล้ว แต่ deploy ถูกบล็อก** ไม่ใช่ pre-publication gate
 5. ส่ง `image_name=ghcr.io/<owner>/<repo>/notify-<api|web>:<short SHA>` โดย SHA มาจาก `git rev-parse --short HEAD` และบันทึก published digest ใน step summary Tag นี้ mutable/เขียนทับได้ มีความเสี่ยง short-SHA collision ไม่ใช่ full-SHA/run-ID tag หรือ immutable identity
 6. **`deploy`** — `needs: dockerize_n_push`, เฉพาะ main push เข้า environment ของ app ตรวจชื่อ secrets ที่ขาดแล้วเรียก `deployment.create-revision` ด้วย exact short-tag `needs.dockerize_n_push.outputs.image_name` ไม่ได้ deploy ด้วย digest และไม่รับประกัน readiness
 
@@ -68,15 +68,15 @@ Secret NTZ_SA_KEY is missing in environment notify-api-production.
 ### API
 
 - Container ใช้ `HOST=0.0.0.0`, `PORT=8787`; PostgreSQL เป็น external UTF-8 database ไม่ใช้ embedded test cluster ใน production
-- ตั้ง `DATABASE_URL`, `ALERT_API_KEY`, selected FCM credential file/mount, `GOOGLE_APPLICATION_CREDENTIALS`, `FCM_DEVICE_TOKEN` และ HTTPS `ACK_PUBLIC_BASE_URL` ตาม runtime contract ไม่ใส่ค่าจริงใน workflow
+- ตั้ง `DATABASE_URL`, `ALERT_API_KEY`, selected FCM credential file/mount, `GOOGLE_APPLICATION_CREDENTIALS`, `FCM_DEVICE_TOKEN` และ HTTPS `ACK_PUBLIC_BASE_URL` ตาม runtime contract ไม่ใส่ค่าจริงใน workflow รุ่น dashboard login เพิ่ม `DASHBOARD_ADMIN_USERNAME` / private `DASHBOARD_BOOTSTRAP_PASSWORD` สำหรับสร้างผู้ดูแลหนึ่งบัญชีครั้งแรก ดู [runtime guide](dashboard-runtime-th.md)
 - Go startup ทำ schema migration ต้องกำหนด migration ownership/backup และตรวจความเข้ากันได้กับ binary เก่าก่อน rollout ไม่เชื่อมฐานจริงหรือย้ายข้อมูลโดยอนุมานสิทธิ์จากการแก้ YAML
 - Key ของ caller อยู่ฝั่ง server เท่านั้น ดู request/error/idempotency/Ack ใน [integration guide](service-integration-th.md)
 
 ### Web
 
 - Container ใช้ `HOSTNAME=0.0.0.0`, `PORT=3010`; ตั้ง HTTPS `BACKEND_URL` และ `BACKEND_API_KEY_FILE` (หรือ `BACKEND_API_KEY` เป็นตัวเลือกสำรอง) ฝั่ง server ตาม [คู่มือ dashboard](dashboard-local-th.md) ห้ามใช้ `NEXT_PUBLIC_*` สำหรับ API key
-- Source ยังเป็น read-only loopback-Host BFF และยังไม่มี login ต้องตั้งและตรวจ authenticated ingress/private access **ก่อนให้ผู้ใช้เข้าถึงจริง** ไม่ได้อนุมัติ public unauthenticated dashboard จากการ rewrite นี้
-- การ bind 0.0.0.0 ไม่เปลี่ยน Host/Origin policy; direct external Host ยังถูกปฏิเสธ 403 ต้องตรวจ proxy/header behavior ให้เข้ากับ policy จริง และห้ามใช้การ rewrite Host เพียงอย่างเดียวแทน authentication
+- รุ่นนี้เพิ่ม login และบังคับเปลี่ยนรหัสครั้งแรก ก่อนอ่านประวัติหรือส่งทดสอบ ต่างจากรุ่นเดิมที่ใช้ loopback-only guard ต้องตั้ง canonical HTTPS `DASHBOARD_PUBLIC_URL` และ preserve public `Host` ให้ตรง ไม่เชื่อ arbitrary forwarded headers ห้ามเปิด anonymous bypass
+- การ bind 0.0.0.0 ไม่ใช่ authentication; ต้องตรวจ cookie/Host/Origin/CSRF และ proxy behavior จริงแยกหลังได้รับอนุมัติ rollout หาก API ใช้ internal HTTP ตั้ง exact origin ผ่าน `BACKEND_ALLOWED_HTTP_ORIGINS` ดู [runtime guide](dashboard-runtime-th.md) และ [FE contract](fe-dashboard-auth-th.md)
 
 ## 5. ตรวจหลัง rollout และหลักฐานที่มี
 

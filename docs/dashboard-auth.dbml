@@ -1,0 +1,65 @@
+// Editable, local implementation diagram; ready for team review, not evidence
+// of production DDL or permission to upload schema/data to an external service.
+Project notify_dashboard {
+  database_type: 'PostgreSQL'
+  Note: 'One installation-wide owner. Login does not create tenant ownership for historical alerts. No public signup. Hash fields are schema names only, never actual credentials.'
+}
+
+Table alerts {
+  id text [pk]
+  idempotency_hash bytea [not null, unique]
+  body_hash bytea [not null]
+  title text [not null]
+  message text [not null]
+  importance text [not null, default: 'critical', note: 'CHECK importance IN (normal, critical); stored as text, not a PostgreSQL enum type']
+  created_at timestamptz [not null]
+  expires_at timestamptz [not null, note: 'Latest start, not a running-alarm stop time']
+  capability_hash bytea [note: 'Per-alert mobile Ack capability hash, not browser login']
+  outcome text [not null, default: 'delivery_unknown', note: 'CHECK outcome IN (delivery_unknown, provider_accepted, provider_failed)']
+  provider_accepted_at timestamptz
+  completed_at timestamptz
+  failure_code text
+  first_ack_at timestamptz
+
+  indexes {
+    (created_at, id) [name: 'alerts_page_idx', note: 'Both descending in PostgreSQL']
+  }
+}
+
+Table ack_actions {
+  alert_id text [not null]
+  client_action_id uuid [not null, note: 'Stable per human action; may be shared by multiple alerts']
+  client_acked_at timestamptz [note: 'Reported device clock, nullable']
+  received_at timestamptz [not null, note: 'Server receipt time']
+
+  indexes {
+    (alert_id, client_action_id) [pk]
+    (alert_id, received_at) [name: 'ack_actions_received_idx']
+  }
+}
+
+Table dashboard_owner {
+  id smallint [pk, note: 'CHECK id = 1 enforces singleton owner']
+  username text [not null, note: 'Case-sensitive; bootstrap validates 3-64 ASCII characters']
+  password_hash text [not null, note: 'Versioned salted PBKDF2-SHA256, never plaintext']
+  bootstrap_hash text [not null, note: 'Retained to disallow reuse of original initial password']
+  must_change_password boolean [not null, default: true]
+  login_failures integer [not null, default: 0]
+  login_window timestamptz
+  change_failures integer [not null, default: 0]
+  change_window timestamptz
+}
+
+Table dashboard_sessions {
+  token_hash bytea [pk, note: 'CHECK length = 32; SHA256 of random opaque token']
+  owner_id smallint [not null]
+  created_at timestamptz [not null]
+  expires_at timestamptz [not null, note: 'Absolute 24-hour expiry; up to 10 sessions retained']
+
+  indexes {
+    expires_at [name: 'dashboard_sessions_expiry_idx']
+  }
+}
+
+Ref: ack_actions.alert_id > alerts.id
+Ref: dashboard_sessions.owner_id > dashboard_owner.id

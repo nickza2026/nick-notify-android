@@ -46,6 +46,9 @@ type API struct {
 	RequestsPerMinute, InvalidPerMinute int
 	MaxConcurrent                       int
 	concurrent                          chan struct{}
+	dashboardWindow                     time.Time
+	dashboardValid, dashboardInvalid    int
+	dashboardConcurrent                 chan struct{}
 }
 type apiError struct {
 	status int
@@ -262,6 +265,10 @@ func (a *API) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	path := r.URL.Path
+	if strings.HasPrefix(path, "/v1/dashboard/") || path == "/v1/dashboard" {
+		a.serveDashboard(w, r)
+		return
+	}
 	parts := strings.Split(strings.TrimPrefix(path, "/v1/alerts/"), "/")
 	id := ""
 	ack := false

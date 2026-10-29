@@ -1,5 +1,7 @@
 # Dashboard ประวัติการแจ้งเตือน — Go/PostgreSQL + Next.js
 
+> การเปลี่ยนแปลงรุ่น Web login: จากหน้าอ่านอย่างเดียว/localhost-only เป็นผู้ดูแลหนึ่งบัญชีพร้อมบังคับเปลี่ยนรหัสครั้งแรก และมีหน้าส่งทดสอบ ดู [runtime ใหม่](dashboard-runtime-th.md) และ [browser contract](fe-dashboard-auth-th.md) ขั้นตอนสอง terminal ด้านล่างเป็น baseline demo เดิม ต้องเพิ่ม private bootstrap ของ API และ `DASHBOARD_PUBLIC_URL` ฝั่ง Web ก่อนใช้รุ่นใหม่ ไม่ถือ env demo เป็นบัญชี login
+
 > ผู้ใช้ยืนยันกลับมาใช้ PostgreSQL วันที่ 20 ต.ค. 2026 ใช้ Go + PostgreSQL ที่ผู้ใช้จัดหา ทดสอบเบื้องต้นด้วย embedded PostgreSQL ก่อน ไม่เชื่อมฐานข้อมูลจริงหรือ deploy อัตโนมัติ ดู [service integration](service-integration-th.md) สำหรับ API ส่งแจ้งเตือน
 
 ## 1. ขอบเขตและสิ่งที่ต้องไม่เข้าใจผิด

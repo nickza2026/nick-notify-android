@@ -105,18 +105,28 @@ jobs:
         run: |
           set -euo pipefail
           test "$(docker image inspect "$IMAGE" --format '{{.Config.User}}')" = node
-          docker run -d --name backoffice-smoke -p 127.0.0.1:3010:3010 "$IMAGE"
+          docker run -d --name backoffice-smoke -p 127.0.0.1:3010:3010 \
+            -e DASHBOARD_PUBLIC_URL=http://127.0.0.1:3010 "$IMAGE"
           trap 'docker logs backoffice-smoke; docker rm -f backoffice-smoke' EXIT
           ready=false
           for attempt in $(seq 1 30); do
-            if curl --fail --silent http://127.0.0.1:3010/ -o /dev/null; then ready=true; break; fi
+            if curl --fail --silent http://127.0.0.1:3010/login -o /dev/null; then ready=true; break; fi
             sleep 1
           done
           test "$ready" = true
-          for path in /api/history /api/stats /api/alerts/bad.id; do
+          for path in \
+            '/api/history?from=2026-10-28T00%3A00%3A00Z&to=2026-10-30T00%3A00%3A00Z' \
+            '/api/stats?from=2026-10-28T00%3A00%3A00Z&to=2026-10-30T00%3A00%3A00Z' \
+            '/api/alerts/00000000-0000-4000-8000-000000000001'; do
             status=$(curl --silent --show-error -o "$RUNNER_TEMP/backoffice-local.json" -w '%{http_code}' "http://127.0.0.1:3010$path")
-            test "$status" = 400
+            test "$status" = 401
           done
+          status=$(curl --silent --show-error -o "$RUNNER_TEMP/backoffice-send-denied.json" -w '%{http_code}' \
+            -H 'Origin: http://127.0.0.1:3010' -H 'X-Notify-Request: dashboard' -H 'Content-Type: application/json' \
+            -H 'Idempotency-Key: synthetic-unauthenticated-smoke' \
+            --data '{"alert_id":"synthetic-unauthenticated-smoke","title":"Synthetic denied request","message":"Must not be sent","ttl_seconds":30,"importance":"normal"}' \
+            http://127.0.0.1:3010/api/test-alerts)
+          test "$status" = 401
           status=$(curl --silent --show-error -o "$RUNNER_TEMP/backoffice-denied.json" -w '%{http_code}' \
             -H 'Host: backoffice.example.invalid' http://127.0.0.1:3010/api/history)
           test "$status" = 403
