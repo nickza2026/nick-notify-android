@@ -1,0 +1,65 @@
+name: __WORKFLOW_NAME__
+
+on:
+__TRIGGERS__
+
+jobs:
+  dockerize_n_push:
+    name: Dockerize & Push
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v3
+      - name: Set outputs
+        id: short_sha
+        run: echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v2
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+      - name: Log in to GitHub Docker Registry
+        uses: docker/login-action@v2
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: lowercase repository
+        id: repository
+        uses: ASzc/change-string-case-action@v5
+        with:
+          string: ${{ github.repository }}/__IMAGE_SUFFIX__
+      - name: Build container image
+        uses: docker/build-push-action@v4
+        with:
+          platforms: linux/amd64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          pull: true
+          push: true
+          context: .
+          file: __DOCKERFILE__
+          tags: |
+            ghcr.io/${{ steps.repository.outputs.lowercase }}:${{ steps.short_sha.outputs.sha_short }}
+      - name: Set output variables
+        id: __OUTPUT_ID__
+        run: echo "image_name=ghcr.io/${{ steps.repository.outputs.lowercase }}:${{ steps.short_sha.outputs.sha_short }}" >> $GITHUB_OUTPUT
+    outputs:
+      image_name: ${{ steps.__OUTPUT_ID__.outputs.image_name}}
+  deploy:
+    needs: dockerize_n_push
+    runs-on: ubuntu-latest
+    steps:
+      - uses: Nortezh/nortezh-action@v1.0.5
+        with:
+          action: deployment.create-revision
+          project: __PROJECT__
+          location: __LOCATION__
+          name: __DEPLOYMENT__
+          image: ${{ needs.dockerize_n_push.outputs.image_name }}
+          type: __TYPE____PORT_SUFFIX__
+        env:
+          SA_AUTH_EMAIL: ${{ secrets.__SECRET_EMAIL__ }}
+          SA_AUTH_KEY: ${{ secrets.__SECRET_KEY__ }}

@@ -17,6 +17,8 @@ Do not run token-revealing commands, enumerate candidate private keys, try disco
 
 ## Credential exclusion
 
+Reference-only inputs are excluded from publication by default even when they contain no credentials. A user-provided workflow/Dockerfile used to teach a skill is not an implicit request to upload the raw file or its real project/deployment identifiers. A broad commit/push request covers intended deliverables, not every illustrative input; obtain explicit artifact-publication approval or keep only generic/sanitized skill outputs. Preserve the local references unless the user requests their deletion. This distinction does not exclude unrelated work that is genuinely ready and intended to ship.
+
 Check at least:
 
 - Populated `.env` variants, deployment/local configuration, `s.env`, private key files, service-account JSON, provider credentials, database passwords, access/refresh tokens, webhook secrets, and authentication cookies.

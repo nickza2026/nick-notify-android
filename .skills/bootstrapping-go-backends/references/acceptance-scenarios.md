@@ -64,6 +64,14 @@ Use these cases to evaluate skill behavior. A plan or dry-run is behavioral revi
 
 **Reject:** Guessing a baseline, dropping databases the harness did not create, silently skipping unsupported names such as 100.sql, or claiming whole-upgrade rollback.
 
+## 9. Reuse an unpublished migration draft
+
+**Prompt:** `schema/42.sql` exists with new table SQL, remains uncommitted, and has only been exercised in disposable test databases. Add another related column/index before this delivery commit.
+
+**Expect:** Verify the draft is not applied in any persistent/shared database, extend `42.sql` with the additional SQL, and re-run against a fresh isolated test database. Commit one numbered migration file alongside required code/tests/docs if commit authorization is separately given. Do not create `43.sql` just for this pre-publication iteration.
+
+**Countercase:** If `42.sql` was committed/shared, applied to a persistent database, or its application status cannot be established safely, do not assume Git status proves it is unapplied. Preserve applied/shared bytes and plan a new migration or ask for the missing status. Separate rollout phases may need separate versioned files with a concrete reason.
+
 ## Completion criteria for a generated project
 
 - Verify application/import/dependency ownership, not just a proposed tree.

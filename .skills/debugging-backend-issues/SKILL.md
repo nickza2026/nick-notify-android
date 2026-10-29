@@ -52,6 +52,8 @@ Wait for commands to finish and record actual results. A background process, one
 
 ### 6. Report only demonstrated outcomes
 
+If the authorized fix adds or modifies a frontend-facing API contract, including validation, permissions, response fields, or errors, create/update its FE `.md` with [documenting-frontend-api-handoffs](../documenting-frontend-api-handoffs/SKILL.md). Cover all affected routes and explain before/after client behavior with request, response, and error examples. A purely internal fix with no client contract change does not require a fabricated FE change; a read-only review remains read-only.
+
 Report the cause, scoped changes, before/after reproduction evidence, added/reused tests, exact commands/results, and remaining limits using [the report template](assets/debugging-report.md.tmpl) when useful. Distinguish fixed-and-verified from candidate-fix, not-reproduced, failed, and blocked states. Do not claim all possible bugs are eliminated.
 
 Check [acceptance scenarios](references/acceptance-scenarios.md) for safe reproduction, red/green evidence, intermittent failures, and read-only boundaries. Do not commit, push, open a PR, or deploy without the corresponding task authorization.

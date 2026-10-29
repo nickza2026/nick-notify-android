@@ -1,38 +1,23 @@
 # Delivery source baseline
 
-## Evidence
+## Current workflow authority
 
-- Reference: Olufy-API, commit `01731b564d56dfb72755fe9421515aafc894b3dc`, inspected read-only on 2026-10-22.
-- Docker evidence: `build/{user,admin,worker,cron}/Dockerfile`. These are source examples, not mandatory target application names.
-- Workflow evidence: `.github/workflows/{user,admin,worker,cron}-{staging,prod}.yaml`.
-- The source builds from module root, targets Linux amd64, pushes to GHCR, passes an image job output to a dependent Nortezh deployment job, and uses main/manual staging versus published-release production.
-- The source uses `WebService` for API applications and `Worker` for worker and scheduled applications. Its application names, destination identifiers, and GitHub secret names are not portable defaults.
-- Action contract checked directly at [Nortezh action v1.0.5](https://github.com/Nortezh/nortezh-action/tree/v1.0.5), including `action.yml` and README. The action uses Node 20 and `deployment.create-revision` may create a target if absent.
+On 2026-10-28 the user supplied three local reference workflows and requested their standalone two-job shape instead of the previous reusable-workflow redesign. Later they explicitly requested removal of the raw reference directory and addition of Dockerfile examples inside the skill. Reference inputs are not publication deliverables; do not restore or re-upload the deleted raw files.
 
-## Verified action pins
+The portable workflow template and **synthetic** golden fixtures preserve step order/action tags, two-job output wiring, secret-name mapping, short-SHA tags, and optional port behavior. Fixtures use `catalog`/`processor`, `example-production`/`example-staging`, and `example-0`, not the reference system's real destinations. Event/branch choices remain proposals to confirm, not forced production/staging defaults.
 
-Resolved public tag refs on 2026-10-22. These pins establish which code a template references, not a security audit or proof that GitHub/Nortezh execution succeeded.
+Golden hashes now describe these sanitized fixtures; they no longer claim byte equality to the original private/project-specific inputs. Explicit action-order/output tests protect the approved shape without needing raw files. Deletion from the current tree does not remove already-published historical blobs; history rewriting and its impact require separate approval and cannot guarantee deletion of other clones/caches.
 
-| Action tag | Commit |
-|---|---|
-| `actions/checkout@v4` | `11d5960a326750d5838078e36cf38b85af677262` |
-| `actions/setup-go@v5` | `40f1582b2485089dde7abd97c1529aa768e1baff` |
-| `docker/setup-buildx-action@v3` | `8d2750c68a42422c14e847fe6c8ac0403b4cbd6f` |
-| `docker/login-action@v3` | `c94ce9fb468520275223c153574b00df6fe4bcc9` |
-| `docker/build-push-action@v6` | `10e90e3645eae34f1e60eeb005ba3a3d33f178e8` |
-| `Nortezh/nortezh-action@v1.0.5` | `ec5808f79fa5cfc74514e8631a0013315a79475f` |
+## Portable Dockerfile examples
 
-## Deliberate differences from source
+Read [Dockerfile examples](dockerfile-examples.md) for complete generic API + Swagger and Worker assets, matching workflow build context, output/entrypoint paths, runtime assets, and ports. They adapt the reference's root-module/multi-stage/distroless approach with pinned host-native Swagger generation and an explicit non-root runtime. Example Go image versions/app names are illustrative; inspect and confirm the actual target requirements before generating Dockerfiles.
 
-- Generic application names and per-app/stage environment configuration, not copied source destinations or secrets.
-- Shared reusable delivery logic with per-app staging/production callers instead of eight nearly identical full pipelines.
-- Production caller excludes prereleases unless the target explicitly chooses another release policy.
-- Tests/build/vet before publishing; source workflows did not themselves establish this gate.
-- Explicit schema/context/workflow path filters and target-specific asset additions.
-- Run-specific full-commit tags plus recorded digest rather than short-SHA-only tags.
-- Job-scoped token permissions, environment-protected deployment credentials, input checks, and explicit WebService ports.
-- Non-root distroless runtime, no unnecessary QEMU for native Linux amd64 builds, pinned actions and Swagger generator, and an explicit `.dockerignore`.
+## Earlier evidence retained only where applicable
+
+- Olufy-API commit `01731b564d56dfb72755fe9421515aafc894b3dc`, inspected read-only on 2026-10-22, informed the per-app Dockerfiles and root-module build approach.
+- [Nortezh action v1.0.5](https://github.com/Nortezh/nortezh-action/tree/v1.0.5) action.yml/README were inspected for inputs: action, project, location, name, image, type, optional port, and `SA_AUTH_EMAIL`/`SA_AUTH_KEY`. `deployment.create-revision` may create a target if absent. Historical inspection is not current platform/runtime readiness evidence.
+- The old shared verify/publish/deploy pipeline, main/manual-staging default, release-only-production default, env-variable destination mapping, run-unique tags, and action SHA pins are **not** the current template. Do not reintroduce them silently.
 
 ## Verification boundaries
 
-The local Docker CLI exists, but both the selected Desktop Linux engine and default local engine were unavailable during authoring. No image build or container smoke succeeded on this basis. No registry push, GitHub workflow run, secret provisioning, or live Nortezh deployment was performed. Static template checks are separate evidence and must not be described as deployment readiness.
+Golden/renderer/YAML checks establish static fidelity and project-local file creation only. Dockerfile static checks and local compilation of synthetic Go entrypoints do not execute external Swagger generation, Docker image construction, or runtime asset reads. No example test validates account credentials, action availability, GHCR publication/pulls, protected environments, GitHub runs, or Nortezh deployments.

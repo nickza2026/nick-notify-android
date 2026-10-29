@@ -1,0 +1,33 @@
+{
+  "workflows": [
+    {
+      "file": "catalog-prod.yaml",
+      "name": "Deploy Catalog Service To Production",
+      "app": "catalog",
+      "environment": "production",
+      "imageSuffix": "catalog-production",
+      "outputId": "catalog_api",
+      "dockerfile": "./build/catalog/Dockerfile",
+      "trigger": { "kind": "push", "branch": "main", "manual": false },
+      "paths": [
+        ".github/workflows/catalog-prod.yaml",
+        "catalog/**",
+        "build/catalog/**",
+        "pkg/**",
+        "cmd/catalog/**",
+        "schema/**",
+        "go.mod",
+        "go.sum",
+        ".dockerignore"
+      ],
+      "nortezh": {
+        "project": "example-production",
+        "location": "example-0",
+        "name": "example-catalog-api",
+        "type": "WebService",
+        "port": 8080
+      },
+      "secrets": { "email": "NTZ_SVA_EMAIL_PROD", "key": "NTZ_SVA_KEY_PROD" }
+    }
+  ]
+}

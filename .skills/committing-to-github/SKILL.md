@@ -28,6 +28,8 @@ Confirm the repository, instructions, current branch, index, worktree changes, a
 
 Identify the delivery batch, including existing staged changes and other safe, ready changes that need to be uploaded. Do not leave out an eligible fix just because the current task or branch names another feature, and do not ask for a separate branch/approval solely because the change is from a different task.
 
+Distinguish deliverables from **reference-only inputs**. Files supplied to illustrate a pattern are not automatically ready for publication, even under a broad commit/push request. Exclude raw reference directories, customer/project-specific examples, and real deployment identities unless the user explicitly approves publishing those artifacts; publish only the intended generic/sanitized skill outputs. Preserve excluded local inputs unless deletion is requested.
+
 Inspect readiness, ownership, and publication intent rather than topical similarity. Preserve excluded, unfinished, or genuinely ambiguous work and existing commits. If it is unclear whether a change is ready or intended for publication, ask about that concrete uncertainty. Stage explicit inspected paths instead of using broad `git add .` or `git add -A`.
 
 Review available test/check evidence and comply with required safe verification. Do not invent successful checks or expand a Git-only task into unauthorized source changes or command execution. Respect an active harness that restricts commit preparation to Git commands.

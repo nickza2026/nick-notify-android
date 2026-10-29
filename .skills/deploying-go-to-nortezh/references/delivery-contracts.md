@@ -1,74 +1,60 @@
 # Delivery contracts
 
-## Application and image boundaries
+## Exact example workflow shape
 
-Build from the root Go module using `build/<app>/Dockerfile`. Keep one output binary per image unless the task explicitly calls for a multi-process container. A separate image does not require a separate Go module.
+Render [the standalone template](../assets/workflow-service.yaml.tmpl) as one full workflow for each confirmed app/environment. Keep `dockerize_n_push` and its `image_name` job output, then `deploy.needs: dockerize_n_push` consuming that exact output. Preserve these steps in order:
 
-The default Dockerfile builds on `$BUILDPLATFORM`, cross-compiles using `$TARGETOS`/`$TARGETARCH`, and uses a non-root distroless runtime. The workflow targets `linux/amd64`, matching the inspected source. Add other architectures only after checking Nortezh/runtime/dependency support; CGO-free Go cross-compilation does not require QEMU just for compilation.
+1. `actions/checkout@v3`.
+2. `short_sha` output from checked-out `git rev-parse --short HEAD`.
+3. `docker/setup-qemu-action@v2`.
+4. `docker/setup-buildx-action@v2`.
+5. `docker/login-action@v2`, GHCR, `github.actor`, `secrets.GITHUB_TOKEN`.
+6. `ASzc/change-string-case-action@v5`, lowercasing `github.repository/<app-environment-suffix>`.
+7. `docker/build-push-action@v4`, `linux/amd64`, GHA cache, `pull: true`, `push: true`, context `.`, the approved app Dockerfile, and short-SHA image tag.
+8. The approved app output-step ID exporting that image as `image_name`.
+9. Nortezh deployment job using `Nortezh/nortezh-action@v1.0.5` and `deployment.create-revision`.
 
-Pin selected base images by version and preferably verified digest under the project's update policy. The template's base tags are not a claim of immutable bytes. Do not disable CA verification or copy a shell into distroless simply to run an unsuitable health-check command.
+Retain example permissions `contents: read`, `packages: write`, and `attestations: write` on the publishing job; their presence is not proof of artifact attestation. Do not add reusable callers, automatic verification jobs, branch guards, GitHub Environment configuration, concurrency, new image tag schemes, or updated/SHA-pinned action versions without explicit agreement. If target policy requires a change, explain it before adapting; “exact example” does not authorize ignoring higher-priority safety/project rules.
 
-## Swagger and assets
+These are the supplied example's versions, **not a current security or runner-compatibility recommendation**. Validate availability/runner support before a live use. An unavailable/deprecated action needs a reported blocker and an approved correction, not an invented successful run or a silent alternate pipeline.
 
-When the application imports generated docs, generate them before compiling. Add a native-builder step such as the following after source copy, replacing placeholders and verifying the selected instance name:
+## Target values and credential scope
 
-```dockerfile
-RUN go install github.com/swaggo/swag/cmd/swag@v1.16.6
-RUN swag init -g cmd/__APP__/main.go -o __APP__/docs --instanceName __SWAGGER_INSTANCE__ --parseDependency --parseInternal
-```
-
-Use appropriate excludes for other applications if parsing collides. Match the generated instance with the application's `swag.ReadDoc` lookup. Do not apply a source-specific default instance to all applications.
-
-If generated docs are not committed, add the same pinned generation command before `go build` in the verification job as well. Generating files only inside Docker cannot satisfy an earlier CI compile that imports them.
-
-Explicitly copy only required runtime assets into known `/app/...` paths, and include their source paths in staging triggers. Validate readability as UID 65532 and relative-path behavior under `WORKDIR /app`. Some persistent mounts need ownership configuration; non-root containers do not automatically fix filesystem permissions.
-
-The `.dockerignore` template deliberately excludes secrets and agent state, not SQL/schema or all JSON files. Review real filenames before sending a context to a local or remote builder. Never use build args to pass credentials; use approved build secrets only when necessary.
-
-## GitHub environment configuration
-
-The reusable workflow selects environment `<app>-<stage>`, where stage is staging or production. This permits different target names and credentials for each application/environment without hardcoding the reference system.
-
-| Name | Kind | Meaning |
+| Field | Where | Confirmed value |
 |---|---|---|
-| `NTZ_PROJECT` | Environment variable | Approved Nortezh project identifier |
-| `NTZ_LOCATION` | Environment variable | Approved location identifier |
-| `NTZ_DEPLOYMENT` | Environment variable | Exact existing deployment name, or explicitly approved creation target |
-| `NTZ_TYPE` | Environment variable | `WebService` or `Worker` |
-| `NTZ_PORT` | Environment variable | Required numeric listening port for WebService; must match app/platform config |
-| `NTZ_SA_EMAIL` | Environment secret | Nortezh service-account email, supplied only to the deployment action |
-| `NTZ_SA_KEY` | Environment secret | Nortezh service-account key, supplied only to the deployment action |
-| `GITHUB_TOKEN` | Built-in job token | GHCR publication, restricted to the publishing job |
+| project, location, name | Nortezh action `with` | Literal non-secret identifiers approved per app/environment |
+| image | Nortezh action `with` | `${{ needs.dockerize_n_push.outputs.image_name }}` |
+| type | Nortezh action `with` | `WebService` or `Worker` |
+| port | Optional `with` for WebService only | Actual approved numeric port; omission requires confirmed compatible action/platform behavior |
+| SA_AUTH_EMAIL | Nortezh action `env` | Reference the approved email secret **name** |
+| SA_AUTH_KEY | Nortezh action `env` | Reference the approved key secret **name** |
 
-The workflow does not pass environment secrets through caller `secrets: inherit`; the deployment job obtains its selected environment's secrets. Configure/protect those environments deliberately. Do not assume typing an environment name automatically creates the intended approval rules.
+Never request/print the secret values or grant a browser privileged provider credentials. GitHub Environment secrets do not resolve merely because the plan labels a stage; adding `deploy.environment` requires explicit configuration/approval outside the exact helper. Confirm private GHCR pull access on Nortezh separately: logging GitHub Actions into GHCR does not configure Nortezh runtime pulls.
 
-Nortezh receives `SA_AUTH_EMAIL` and `SA_AUTH_KEY`, not the GitHub secret names themselves. The action contract accepts `action`, `project`, `location`, `name`, `image`, optional `port`, and `type`. The WebService step supplies an explicit port; the Worker step omits it. Do not rely on the action's default port 80 when the process listens elsewhere.
+## Source, triggers, and honest limitations
 
-Configure image pull access on Nortezh separately for private GHCR packages. A successful registry login/push in GitHub does not give Nortezh's runtime the same credentials.
+- Ask first about prod-only/staging-only/both/more and branch/event selection. Preserve `workflow_dispatch + push` or `release: published` only if the user selects those policies. Release/manual has no push branch/path filter; dispatch allows selectable refs unless a separately approved guard prevents it.
+- Do not add `pull_request_target` or PR-controlled code running with deployment secrets. The exact example has no PR event.
+- Ask whether to run tests on PR open/update before adding or enabling any PR-test CI. Preserve existing approved checks; do not decide to enable or disable them silently. If enabled, approve a separate test-only workflow with explicit base-branch/event/path filters and safe test commands, without GHCR publication, deployment, or production secrets. This does not waive ordinary authorized local tests or mandatory existing verification.
+- Confirm source identity from checkout, image tag, and job output. The example has **no test gate**; do not claim it tests before publishing. Run approved safe target checks separately or propose an explicit pipeline change if requested.
+- Short-SHA tags and `type=gha` cache options are retained for fidelity. Short tags are mutable; retries may overwrite them, short SHAs can collide, and shared GHA caches/concurrent runs may interfere. There is no concurrency or freshness guard. Explain material risks before real use; any stronger tag/cache/serialization policy is an approved deviation, not a silent default.
+- Audit app/shared/schema/runtime/context dependencies and show missing path filters for approval. The original samples omit some such filters; exact reproduction alone does not prove all necessary changes trigger a build.
+- Source examples use production releases without excluding prereleases. Do not pretend a release is automatically production-branch-only.
 
-## Triggers, revision identity, and gates
+## Containers, schema, and assets
 
-- Preserve main/manual staging and published-release production only when that matches the requested release policy. The template excludes prereleases from production; adapt that guard only to an explicit policy. Do not enable real deployment while merely authoring templates.
-- Staging filters include the app tree, composition root, build files, shared pkg, schema, module files, `.dockerignore`, and reusable/caller workflows. Add runtime assets and other dependency paths actually used by that app. Shared changes may rebuild several apps correctly.
-- Verification and publishing check out the same `github.sha`. Do not test one branch head and build another mutable ref.
-- The tag includes full commit SHA plus run ID/attempt. Pass the exact published reference through a job output; never deploy `latest` or recalculate a different image name in the deploy job.
-- Record the build digest for traceability. Registry tags remain mutable without a registry policy; a unique tag is not a proof of cryptographic immutability. Use digest deployment only after confirming platform support.
-- Least-privilege job permissions separate contents-read verification, packages-write publishing, and credentialed deployment. Third-party actions are commit-pinned to verified source tags, not automatically refreshed.
-- Serialize per-app/stage delivery without cancelling an in-flight deployment. GitHub concurrency is not a guarantee of chronological promotion; review stale releases and approved target state.
-- Do not run tests under production environment credentials. Do not add `pull_request_target` that executes a contributor's code with secrets.
+Read [the complete Dockerfile examples](dockerfile-examples.md) and choose API + Swagger, Worker, or the minimal no-generator template before materializing `build/<app>/Dockerfile`. Their synthetic app names, Go image version, and ports are not approved target configuration. Keep reference-only inputs out of publication unless explicitly authorized.
 
-## Migration and runtime acceptance
+Build from one module root using `build/<app>/Dockerfile`; choose actual app names and module-compatible Go versions. The Docker template cross-compiles CGO-free code for the target platform and uses a non-root distroless runtime. If CGO/platform/runtime assets require something different, propose it. A successful Go binary build does not prove external templates/assets were copied or that non-root permissions are correct.
 
-Choose migration ownership per database. A per-app workflow does not establish safe multi-app rollout order. Ensure pending migrations are backward-compatible with still-running binaries or define an explicit coordinated deployment plan.
+When generated Swagger imports are required, use a verified pinned generator before compilation, e.g. `github.com/swaggo/swag/cmd/swag@v1.16.6` with the correct `cmd/<app>/main.go`, output directory, and instance name. Workers do not need Swagger for symmetry. If approved separate tests compile generated imports, generate there too, not only inside Docker.
 
-Confirm deployment existence/configuration before using `deployment.create-revision`: the action can create a deployment if missing. It does not itself prove the correct database credentials, resources, scaling, volumes, network, health checks, or registry pulls were configured.
+Review `.dockerignore` and explicitly copy only required non-secret runtime assets. Do not pass credentials as Docker build args or copy whole source/env/test data into runtime. Confirm migration ownership and rollout order per database; two independent workflows do not coordinate multi-app migrations. Preserve applied migration history and compatibility with still-running binaries.
 
-After an authorized deployment, inspect revision/image, health/logs, startup/shutdown, and the application's relevant endpoints/job processing. A revision API response or `public_url` output alone is not success evidence. Do not perform real financial mutations as a smoke test.
+## Validation and rollout evidence
 
-## Verification checklist
+Run renderer regressions and parse generated YAML; use actionlint if available. Node tests include sanitized golden hashes and explicit action-order/output assertions, policy variations, actual isolated CLI file creation, and no-overwrite/path guards. Raw user examples are not required or published. Dockerfile checks cover build/output/entrypoint/Swagger layout and compile synthetic entrypoints with an available local Go toolchain; they do not execute the external Swagger generator or Docker build/runtime. The helper's approval flag is an attestation, not a consent/security boundary; use stable trusted projects without hostile concurrent filesystem edits.
 
-- Replace every template token; verify application paths and all required runtime assets.
-- Parse YAML and run workflow lint if available; check input validation, needs/outputs, source revision, per-app/stage concurrency, and protected environments.
-- Inspect tests before executing; complete safe related checks before claiming readiness.
-- Build the intended Docker context/platform and test runtime behavior when Docker is available.
-- Report independently: static checks, project tests, image build, local container smoke, GitHub execution, image publication, and Nortezh rollout. Never collapse unrun layers into one "passed" status.
+Inspect tests/scripts before running them. Keep checks isolated from production/shared DBs, real money/credits, and live providers. Build/smoke-test containers only within authorized scope. After a separately approved live deployment, verify the actual image/revision, pull access, configuration, health/logs, and safe application behavior. Nortezh may create a target if its name is absent; never treat an API revision/public URL as readiness proof.
+
+Report separately: files generated, static checks/lint, project tests, Docker build/smoke, GitHub execution, registry publication, and Nortezh rollout. Missing/blocked layers stay missing/blocked; no automatic commit/push/secret provisioning/deploy follows file generation.
