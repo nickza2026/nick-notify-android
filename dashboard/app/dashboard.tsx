@@ -167,7 +167,10 @@ export default function Dashboard({ demo }: { demo: boolean }) {
 
   return <main className="shell">
     {demo && <div className="demo-banner" role="status">ข้อมูลสาธิต — ไม่ใช่ประวัติการส่งจริง</div>}
-    <header className="page-header"><div><span className="eyebrow">ศูนย์ปฏิบัติการ · อ่านอย่างเดียว</span><h1>ประวัติการแจ้งเตือน</h1><p>ตรวจสอบผลการส่งคำขอและการแตะรับทราบที่รายงานจากอุปกรณ์ ข้อมูลการรับคำขอไม่ยืนยันว่าอุปกรณ์ส่งเสียงแล้ว</p></div><div className="refresh-group"><button type="button" onClick={refresh} className="primary-button">รีเฟรชข้อมูล</button><span className="muted" aria-live="polite">{lastFetched ? <>ดึงรายการล่าสุด: <Time value={lastFetched} /> (เวลาบนอุปกรณ์นี้)</> : 'ยังไม่ได้ดึงรายการ'}</span></div></header>
+    <header className="page-header">
+      <div><span className="eyebrow">ศูนย์ปฏิบัติการ · อ่านอย่างเดียว</span><h1>ประวัติการแจ้งเตือน</h1><p>ตรวจสอบผลการส่งคำขอและการแตะรับทราบที่รายงานจากอุปกรณ์ ข้อมูลการรับคำขอไม่ยืนยันว่าอุปกรณ์ส่งเสียงแล้ว</p></div>
+      <div className="refresh-group"><button type="button" onClick={refresh} className="secondary-button">รีเฟรชข้อมูล</button><span className="muted" aria-live="polite">{lastFetched ? <>ดึงรายการล่าสุด: <Time value={lastFetched} /> (เวลาบนอุปกรณ์นี้)</> : 'ยังไม่ได้ดึงรายการ'}</span></div>
+    </header>
     <section className="filter-panel" aria-label="ตัวกรองรายการ"><form onSubmit={applyFilters}><div className="filter-fields"><label>ตั้งแต่วันที่ <input type="date" value={draftFrom} onChange={(event) => setDraftFrom(event.target.value)} required /></label><label>ถึงวันที่ <input type="date" value={draftTo} onChange={(event) => setDraftTo(event.target.value)} required /></label><label>สถานะรายการ <select value={draftStatus} onChange={(event) => setDraftStatus(event.target.value as StatusFilter)}>{statuses.map((status) => <option value={status} key={status}>{statusNames[status]}</option>)}</select></label></div><div className="filter-actions"><button type="submit" className="primary-button">ใช้ตัวกรอง</button><button type="button" className="secondary-button" onClick={clearFilters}>ล้างตัวกรอง</button></div>{filterError && <p role="alert" className="error">{filterError}</p>}</form></section>
     <Summary stats={stats} state={statsState} error={statsError} />
     <section className="section history-section" aria-labelledby="history-title"><div className="section-heading"><div><h2 id="history-title">รายการแจ้งเตือน</h2><p>เรียงจากใหม่ไปเก่า · {statusNames[filter.status]}</p></div><span className="loaded-count" aria-live="polite">{historyState === 'loading' && items.length === 0 ? 'กำลังโหลดรายการ…' : `โหลดแล้ว ${count(items.length)} รายการ`}</span></div>
@@ -176,7 +179,7 @@ export default function Dashboard({ demo }: { demo: boolean }) {
         <div className="loading-list" role="status" aria-label="กำลังโหลดรายการ"><div className="skeleton" /><div className="skeleton" /><div className="skeleton" /></div> :
         items.length === 0 && historyState === 'ready' ?
           <div className="empty"><h3>{filter.status === 'all' ? 'ยังไม่มีประวัติในช่วงเวลานี้' : 'ไม่พบรายการที่ตรงกับตัวกรอง'}</h3><p>ลองปรับช่วงวันที่หรือเลือกสถานะอื่น</p></div> :
-          items.length > 0 && <div className="table-wrap"><table>
+          items.length > 0 && <div className="table-wrap" role="region" aria-label="ตารางประวัติการแจ้งเตือน เลื่อนแนวนอนได้" tabIndex={0}><table>
             <thead><tr><th>สร้างเมื่อ</th><th>ข้อความ</th><th>ระดับการแจ้งเตือน</th><th>ผลผู้ให้บริการ</th><th>การแตะรับทราบ</th><th>จำนวนแตะ</th><th>รับทราบครั้งแรก (เซิร์ฟเวอร์)</th><th>รับทราบล่าสุด (เซิร์ฟเวอร์)</th><th>รายละเอียด</th></tr></thead>
             <tbody>{items.map((item) => <tr key={item.alert_id}>
               <td data-label="สร้างเมื่อ"><Time value={item.created_at} /></td>

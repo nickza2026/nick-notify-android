@@ -2,14 +2,14 @@
 // temporary TLS termination and a fresh browser profile. Never reads real secrets.
 import assert from 'node:assert/strict';
 import { spawn, execFileSync } from 'node:child_process';
-import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { cdpClient, freshScreenshot, waitFor } from './dashboard-browser-support.mjs';
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -65,10 +65,10 @@ async function screenshot(name, expectedText) {
   });
   report.screenshots.push(`${name}.png`);
 }
-async function checkLayout(width, label) {
+async function checkLayout(width, label, expectedText = 'ประวัติ') {
   const metrics = await cdp.evaluate(`(() => {
     const width=${width};
-    const boxes=Array.from(document.querySelectorAll('.console,.workspace,.topbar,.account-controls,.shell,.filter-panel,.summary-grid,.history-section,.table-wrap,.composer-grid,.auth-card')).map(el=>{
+    const boxes=Array.from(document.querySelectorAll('.console,.site-header,.header-inner,.workspace,.account-controls,.shell,.filter-panel,.summary-grid,.history-section,.table-wrap,.composer-grid,.auth-card')).map(el=>{
       const b=el.getBoundingClientRect();return {element:el.className,left:Math.round(b.left),right:Math.round(b.right),width:Math.round(b.width)};
     });
     const escaped=Array.from(document.querySelectorAll('body *')).map(el=>{const b=el.getBoundingClientRect(),p=el.parentElement,c=getComputedStyle(el);return {element:el.tagName+'.'+el.className,left:Math.round(b.left),right:Math.round(b.right),width:Math.round(b.width),overflow:c.overflowX,min_width:c.minWidth,parent:p?.tagName+'.'+p?.className,parent_overflow:p?getComputedStyle(p).overflowX:null};}).filter(b=>b.width>0&&(b.left < -1 || b.right>width+1)).slice(0,35);
@@ -76,7 +76,7 @@ async function checkLayout(width, label) {
   })()`);
   (report.layout ??= []).push({ label, expected_width:width, ...metrics });
   if (metrics.root_scroll > width+1 || metrics.overflow.length) {
-    await screenshot(`layout-failure-${label}`, 'ประวัติ');
+    await screenshot(`layout-failure-${label}`, expectedText);
     throw Error(`Layout overflow or clipped content at ${label}; see report layout metrics`);
   }
 }
@@ -110,8 +110,56 @@ async function checkContrast(theme) {
   for(const key of ['body_text','muted_text','primary_label'])assert.ok(values[key]>=4.5,`${theme} representative ${key} contrast`);
   assert.ok(values.input_border>=3,`${theme} representative input boundary contrast`);
 }
+async function checkFieldFamily(scope, label) {
+  const fields = await cdp.evaluate(`Array.from(document.querySelectorAll(${JSON.stringify(scope)})).filter(el=>el.matches('input:not([type=radio]),select,textarea')).map(el=>{
+    const style=getComputedStyle(el),box=el.getBoundingClientRect();
+    return {tag:el.tagName,type:el.type,height:box.height,width:box.width,background:style.backgroundColor,border_color:style.borderTopColor,border_width:style.borderTopWidth,border_style:style.borderTopStyle};
+  })`);
+  assert.ok(fields.length >= 2, `${label}: mounted field family exists`);
+  assert.ok(fields.every(field => field.height >= 44 && field.width > 0), `${label}: visible usable field shells`);
+  const paint = ({ background, border_color, border_width, border_style }) => ({ background, border_color, border_width, border_style });
+  for (const field of fields) assert.deepEqual(paint(field), paint(fields[0]), `${label}: field shell paint is consistent`);
+  (report.field_families ??= []).push({ label, fields });
+}
+async function checkMinimalShell() {
+  const shell = await cdp.evaluate(`(() => {
+    const nav=document.querySelector('nav[aria-label="เมนูหลัก"]');
+    return {sidebar:!!document.querySelector('.sidebar'),header:!!nav?.closest('header'),links:nav?.querySelectorAll('a').length,decorative_tagline:document.body.innerText.includes('OPERATIONS CONSOLE')};
+  })()`);
+  assert.deepEqual(shell, { sidebar:false, header:true, links:2, decorative_tagline:false }, 'Minimal header replaces the sidebar without losing navigation');
+  report.minimal_shell = shell;
+}
+async function checkCompactMobileHeader() {
+  const header = await cdp.evaluate(`(() => {
+    const brand=document.querySelector('.brand').getBoundingClientRect(),account=document.querySelector('.account-controls').getBoundingClientRect(),nav=document.querySelector('.main-nav').getBoundingClientRect(),shell=document.querySelector('.site-header').getBoundingClientRect();
+    return {brand_top:brand.top,account_top:account.top,nav_top:nav.top,height:shell.height};
+  })()`);
+  assert.ok(Math.abs(header.brand_top-header.account_top)<=2 && header.nav_top>header.account_top && header.height<=128, 'Representative 360px header uses two readable rows, not three');
+  report.compact_mobile_header=header;
+}
+async function checkTableKeyboard() {
+  const before = await cdp.evaluate(`(() => {
+    const table=document.querySelector('.table-wrap');
+    if(!table || table.tabIndex!==0 || !table.getAttribute('aria-label'))throw Error('Named keyboard scroll region required');
+    table.focus();return {left:table.scrollLeft,scrollable:table.scrollWidth>table.clientWidth};
+  })()`);
+  assert.ok(before.scrollable, 'Narrow viewport exercises the real scrolling table');
+  await cdp.key('ArrowRight','ArrowRight',39);
+  await textWait(`document.querySelector('.table-wrap').scrollLeft > ${before.left}`, 'native keyboard table scroll');
+  report.table_keyboard_scroll = true;
+  await cdp.evaluate('document.querySelector(".table-wrap").scrollLeft=0');
+}
+async function checkDialogViewport(label) {
+  const box = await cdp.evaluate(`(() => {
+    const dialog=document.querySelector('dialog[open]');if(!dialog)throw Error('Open dialog required');
+    const b=dialog.getBoundingClientRect();return {left:b.left,top:b.top,right:b.right,bottom:b.bottom,width:innerWidth,height:innerHeight,focus_inside:dialog.contains(document.activeElement)};
+  })()`);
+  assert.ok(box.left>=-1 && box.top>=-1 && box.right<=box.width+1 && box.bottom<=box.height+1, `${label}: dialog stays inside viewport`);
+  assert.ok(box.focus_inside, `${label}: focus stays in modal`);
+  (report.dialogs ??= []).push({ label, ...box });
+}
 async function checkRadioControls(label) {
-  const metrics=await cdp.evaluate(`Array.from(document.querySelectorAll('.radio-card')).map(card=>{const i=card.querySelector('input').getBoundingClientRect(),d=card.querySelector('span').getBoundingClientRect(),c=card.getBoundingClientRect();return {input_width:i.width,description_width:d.width,description_right:d.right,card_right:c.right};})`);
+  const metrics=await cdp.evaluate(`Array.from(document.querySelectorAll('.radio-card,.importance-option')).map(card=>{const i=card.querySelector('input').getBoundingClientRect(),d=card.querySelector('span').getBoundingClientRect(),c=card.getBoundingClientRect();return {input_width:i.width,description_width:d.width,description_right:d.right,card_right:c.right};})`);
   (report.radio_controls ??= []).push({label,metrics});
   assert.equal(metrics.length,2,'Both notification modes visible');
   assert.ok(metrics.every(m=>m.input_width<=32&&m.description_width>=100&&m.description_right<=m.card_right+1),'Compact radio controls must not squeeze or clip mode descriptions');
@@ -126,6 +174,10 @@ function removeOwnedRoot() {
 }
 
 try {
+  const sources = ['globals.css','console-shell.tsx','auth-form.tsx','dashboard.tsx','test/test-composer.tsx','layout.tsx','error.tsx'].map(name => join(repo,'dashboard','app',name));
+  const buildFile = join(repo,'dashboard','.next','BUILD_ID');
+  assert.ok(statSync(buildFile).mtimeMs >= Math.max(...sources.map(file => statSync(file).mtimeMs)), 'Build must be newer than all changed UI sources');
+  report.source = { commit:execFileSync('git',['rev-parse','HEAD'],{cwd:repo,encoding:'utf8'}).trim(), ui_sha256:createHash('sha256').update(sources.map(file => readFileSync(file)).reduce((a,b)=>Buffer.concat([a,b]),Buffer.alloc(0))).digest('hex'), build_id:readFileSync(buildFile,'utf8').trim() };
   const binary = join(root, process.platform === 'win32' ? 'fixture.exe' : 'fixture');
   execFileSync('go', ['build','-o',binary,join(repo,'tools','fixtures','dashboard-server.go')], { cwd:join(repo,'backend'), env:{...cleanEnv,GOTOOLCHAIN:'local',GOPROXY:'off',GOSUMDB:'off'}, timeout:120000, stdio:'pipe' });
   fixture = owned(binary, ['--root',root]);
@@ -156,22 +208,28 @@ try {
   const targets=await (await fetch(`${debugURL}/json/list`)).json(); const target=targets.find(t=>t.type==='page'&&t.url==='about:blank'); assert.ok(Boolean(target)); cdp=await cdpClient(target.webSocketDebuggerUrl);
   await cdp.send('Page.enable');await cdp.send('Runtime.enable');await cdp.send('Network.enable');await cdp.send('Security.enable');await cdp.send('Security.setIgnoreCertificateErrors',{ignore:true});
   await cdp.send('Emulation.setDeviceMetricsOverride',{width:1440,height:900,deviceScaleFactor:1,mobile:false});
-  await navigate('/login');await textWait('Boolean(document.querySelector("input[name=username]"))','login form');await screenshot('login-dark','เข้าสู่ระบบ');
+  await navigate('/login');await textWait('Boolean(document.querySelector("input[name=username]"))','login form');await checkFieldFamily('.stack-form input','login-dark');await screenshot('login-dark','เข้าสู่ระบบ');
+  await cdp.send('Emulation.setDeviceMetricsOverride',{width:360,height:844,deviceScaleFactor:1,mobile:true});await checkLayout(360,'login-mobile-360','เข้าสู่ระบบ');await screenshot('login-dark-mobile-360','เข้าสู่ระบบ');
+  await cdp.send('Emulation.setDeviceMetricsOverride',{width:1440,height:900,deviceScaleFactor:1,mobile:false});
   await cdp.fill('input[name=username]','admin');await cdp.fill('input[name=password]',manifest.bootstrap_password);await cdp.click('document.querySelector("form button")');
   await textWait('location.pathname === "/change-password" && Boolean(document.querySelector("input[name=new_password]"))','first login forced password change');
   const firstLimited=await cookieToken();const restricted=await pageRequest(statsPath,{token:firstLimited});assert.equal(restricted.status,403);assert.equal(restricted.data.code,'password_change_required');
-  await screenshot('first-password-change','ตั้งรหัสผ่านใหม่');
+  await checkFieldFamily('.stack-form input','forced-password-change');await screenshot('first-password-change','ตั้งรหัสผ่านใหม่');
+  await cdp.send('Emulation.setDeviceMetricsOverride',{width:360,height:844,deviceScaleFactor:1,mobile:true});await checkLayout(360,'password-mobile-360','ตั้งรหัสผ่านใหม่');await screenshot('first-password-change-mobile-360','ตั้งรหัสผ่านใหม่');
+  await cdp.send('Emulation.setDeviceMetricsOverride',{width:1440,height:900,deviceScaleFactor:1,mobile:false});
   await clickButton('ออกจากระบบ');await textWait('location.pathname === "/login"','restricted-session logout escape');assert.equal((await pageRequest(statsPath,{token:firstLimited})).status,401);
   await cdp.fill('input[name=username]','admin');await cdp.fill('input[name=password]',manifest.bootstrap_password);await cdp.click('document.querySelector("form button")');await textWait('location.pathname === "/change-password" && Boolean(document.querySelector("input[name=new_password]"))','restricted login again');
   const limited=await cookieToken();
   const nextPassword=`Synthetic new passphrase ${randomUUID()}`;
   await cdp.fill('input[name=current_password]',manifest.bootstrap_password);await cdp.fill('input[name=new_password]',nextPassword);await cdp.fill('input[name=confirm]',nextPassword);await cdp.click('document.querySelector("form button")');
-  await textWait('location.pathname === "/" && Boolean(document.querySelector(".sidebar"))','password changed and history loaded');
+  await textWait('location.pathname === "/" && Boolean(document.querySelector("nav[aria-label=เมนูหลัก]"))','password changed and history loaded');
+  await checkMinimalShell();
+  await textWait('document.body.innerText.includes("ยังไม่มีประวัติในช่วงเวลานี้")','initial empty history');await screenshot('history-empty','ยังไม่มีประวัติในช่วงเวลานี้');
   const full=await cookieToken();assert.ok(full!==limited,'Password change must rotate the opaque cookie');assert.equal((await pageRequest(statsPath,{token:limited})).status,401);
   check('real browser first-login gate; password change rotates secure cookie and revokes limited session');
   await navigate('/test');await textWait('Boolean(document.querySelector("input[name=title]"))','test composer');
-  await checkRadioControls('composer-desktop');await screenshot('composer-dark-desktop','ธรรมดา · เงียบ');
-  await cdp.send('Emulation.setDeviceMetricsOverride',{width:360,height:844,deviceScaleFactor:1,mobile:true});await checkRadioControls('composer-mobile-360');await checkLayout(360,'composer-mobile-360');await screenshot('composer-dark-mobile-360','ธรรมดา · เงียบ');
+  await checkFieldFamily('.stack-form input,.stack-form textarea','composer-dark');await checkRadioControls('composer-desktop');await screenshot('composer-dark-desktop','ธรรมดา · เงียบ');
+  await cdp.send('Emulation.setDeviceMetricsOverride',{width:360,height:844,deviceScaleFactor:1,mobile:true});await checkCompactMobileHeader();await checkRadioControls('composer-mobile-360');await checkLayout(360,'composer-mobile-360');await screenshot('composer-dark-mobile-360','ธรรมดา · เงียบ');
   await cdp.send('Emulation.setDeviceMetricsOverride',{width:1440,height:900,deviceScaleFactor:1,mobile:false});
   assert.equal(await cdp.evaluate('document.querySelector("input[name=importance]").checked'),true);
   await cdp.fill('input[name=title]','ทดสอบเงียบจาก browser จำลอง');await cdp.fill('textarea[name=message]','ข้อมูลสังเคราะห์เท่านั้น <b>ไม่ใช่ HTML</b> ไม่มีการส่ง FCM จริง');assert.equal((await control('fail-create-response')).status,200);await cdp.click('document.querySelector("form button")');
@@ -187,7 +245,9 @@ try {
   await cdp.fill('input[name=title]','ทดสอบวิกฤตจำลอง ไม่มีเสียงจริง');await cdp.click('document.querySelector("form button")');
   await textWait('Boolean(document.querySelector("dialog[open]"))','critical confirmation');assert.equal((await control('inspect')).data.send_calls,1);
   await screenshot('critical-confirmation','TTL ไม่ใช่เวลาหยุดเสียง');
+  await cdp.send('Emulation.setDeviceMetricsOverride',{width:360,height:844,deviceScaleFactor:1,mobile:true});await checkDialogViewport('critical-mobile-360');await screenshot('critical-confirmation-mobile-360','ยืนยันส่งแบบวิกฤต?');
   await cdp.key('Escape','Escape',27);await textWait('!document.querySelector("dialog[open]")','cancel critical confirmation');assert.equal((await control('inspect')).data.send_calls,1);
+  await cdp.send('Emulation.setDeviceMetricsOverride',{width:1440,height:900,deviceScaleFactor:1,mobile:false});
   await cdp.click('document.querySelector("form button")');await textWait('Boolean(document.querySelector("dialog[open]"))','critical confirmation again');
   await cdp.click('Array.from(document.querySelector("dialog[open]").querySelectorAll("button")).find(e=>e.textContent.includes("ยืนยัน"))');
   await waitFor(async()=> (await control('inspect')).data.send_calls===2,'synthetic critical accepted');
@@ -198,19 +258,24 @@ try {
   const stats=await pageRequest(statsPath,{token:full});assert.equal(stats.status,200);assert.equal(stats.data.total_alerts,2);assert.equal(stats.data.acknowledged,2);assert.equal(stats.data.ack_action_count,1);
   await screenshot('synthetic-ack-received','เซิร์ฟเวอร์รับครั้งแรก');
   check('normal default, critical confirmation/cancel, real Go reservation + synthetic sender only');check('normal/critical capability Ack and duplicate retries persist through PostgreSQL; shared action counted once');
-  await navigate('/');await textWait('document.body.innerText.includes("ทดสอบเงียบจาก browser จำลอง")','history after Ack');await checkLayout(1440,'desktop');await checkContrast('dark');await screenshot('history-dark-desktop','ประวัติ');
-  await chooseTheme('light');await checkContrast('light');await screenshot('history-light-desktop','ประวัติ');await navigate('/');assert.equal(await cdp.evaluate('document.documentElement.dataset.theme'),'light');
+  await navigate('/');await textWait('document.body.innerText.includes("ทดสอบเงียบจาก browser จำลอง")','history after Ack');await checkLayout(1440,'desktop');await checkFieldFamily('.filter-fields input,.filter-fields select','filters-dark');await checkContrast('dark');await screenshot('history-dark-desktop','ประวัติ');
+  await chooseTheme('light');await checkFieldFamily('.filter-fields input,.filter-fields select','filters-light');await checkContrast('light');await screenshot('history-light-desktop','ประวัติ');await navigate('/');assert.equal(await cdp.evaluate('document.documentElement.dataset.theme'),'light');
   await chooseTheme('system');await cdp.send('Emulation.setEmulatedMedia',{features:[{name:'prefers-color-scheme',value:'dark'}]});await screenshot('history-system-dark','ประวัติ');await chooseTheme('dark');
   await cdp.send('Emulation.setDeviceMetricsOverride',{width:1024,height:768,deviceScaleFactor:1,mobile:false});await checkLayout(1024,'desktop-1024');await screenshot('history-dark-desktop-1024','ประวัติ');
   for(const width of [390,360]) {await cdp.send('Emulation.setDeviceMetricsOverride',{width,height:844,deviceScaleFactor:1,mobile:true});await cdp.evaluate('window.scrollTo(0,0)');await checkLayout(width,`mobile-${width}`);await screenshot(`history-dark-mobile-${width}`,'ประวัติ');await cdp.evaluate('document.querySelector(".history-section").scrollIntoView({block:"start"})');await screenshot(`history-dark-mobile-list-${width}`,'รายการแจ้งเตือน');}
+  await chooseTheme('system');await cdp.evaluate('window.scrollTo(0,0)');await checkCompactMobileHeader();await screenshot('history-system-dark-mobile-360','ประวัติ');await chooseTheme('dark');
+  await checkTableKeyboard();
   await cdp.send('Emulation.setDeviceMetricsOverride',{width:720,height:450,deviceScaleFactor:2,mobile:false});await checkLayout(720,'200pct-equivalent');await screenshot('history-200pct-equivalent','ประวัติ');
   await cdp.send('Emulation.setDeviceMetricsOverride',{width:1440,height:900,deviceScaleFactor:1,mobile:false});
-  await cdp.click('Array.from(document.querySelectorAll("button")).find(e=>e.textContent.includes("รายละเอียด"))');await textWait('Boolean(document.querySelector("dialog[open]"))','detail dialog');assert.ok(await cdp.evaluate('document.querySelector("dialog[open]").contains(document.activeElement)'));await screenshot('alert-detail-timeline','รายละเอียด');await cdp.key('Escape','Escape',27);await textWait('!document.querySelector("dialog[open]")','detail Escape');
+  await cdp.click('Array.from(document.querySelectorAll("button")).find(e=>e.textContent.includes("รายละเอียด"))');await textWait('Boolean(document.querySelector("dialog[open] .detail-fields"))','loaded detail dialog');await checkDialogViewport('detail-desktop');await screenshot('alert-detail-timeline','รายละเอียด');
+  await cdp.send('Emulation.setDeviceMetricsOverride',{width:360,height:844,deviceScaleFactor:1,mobile:true});await checkDialogViewport('detail-mobile-360');await screenshot('alert-detail-mobile-360','รายละเอียด');
+  await cdp.key('Escape','Escape',27);await textWait('!document.querySelector("dialog[open]")','detail Escape');await cdp.send('Emulation.setDeviceMetricsOverride',{width:1440,height:900,deviceScaleFactor:1,mobile:false});
   check('dark/light/system persistence, desktop/mobile and 200%-equivalent reflow, native detail dialog keyboard Escape');
   assert.equal((await control('seed-history')).data.seeded,26);
   await navigate('/');await textWait('Boolean(Array.from(document.querySelectorAll("button")).find(b=>b.textContent.trim()==="โหลดเพิ่มเติม"))','real PostgreSQL cursor page');
   assert.equal((await control('fail-pagination')).status,200);await clickButton('โหลดเพิ่มเติม');
   await textWait('document.body.innerText.includes("ระบบไม่พร้อมใช้งานชั่วคราว")','pagination failure state');
+  await screenshot('pagination-error-retains-history','แสดงรายการเดิมซึ่งอาจไม่เป็นปัจจุบัน');
   assert.equal((await control('inspect')).data.cursor_calls,1);
   // Retry the same failed page through the actual enabled UI control.
   await cdp.click('Array.from(document.querySelectorAll("button")).find(b=>b.textContent.includes("โหลดเพิ่มเติม") || b.textContent.includes("ลองโหลดเพิ่มเติม"))');
