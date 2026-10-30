@@ -92,34 +92,44 @@ async function cookieToken() {
 async function textWait(expression, label) { return waitFor(() => cdp.evaluate(expression), label); }
 async function clickButton(text) { await cdp.click(`Array.from(document.querySelectorAll('button')).find(b => b.textContent.trim() === ${JSON.stringify(text)})`); }
 async function chooseTheme(value) {
-  // Native select setup uses the supported setter/change path; form buttons
-  // and password/text entry below use native Input events.
-  await cdp.evaluate(`(() => { const el=document.querySelector('select[aria-label="รูปแบบสี"]'); el.value=${JSON.stringify(value)}; el.dispatchEvent(new Event('change',{bubbles:true})); })()`);
+  const labels={dark:'มืด',light:'สว่าง',system:'ตามระบบ'};
+  await cdp.click('document.querySelector(".theme-control.ant-select,.theme-control .ant-select")');
+  await textWait('Boolean(document.querySelector(".ant-select-dropdown:not(.ant-select-dropdown-hidden)"))','Ant theme dropdown opened');
+  await cdp.click(`Array.from(document.querySelectorAll('.ant-select-dropdown:not(.ant-select-dropdown-hidden) .ant-select-item-option')).find(el=>el.getAttribute('title')===${JSON.stringify(labels[value])})`);
   await textWait(`document.documentElement.dataset.theme === ${JSON.stringify(value)}`, `theme ${value}`);
+  await textWait(`document.querySelector('.theme-control.ant-select,.theme-control .ant-select').textContent.includes(${JSON.stringify(labels[value])})`, 'closed Ant select displays the selected label');
   await textWait('!document.getAnimations().some(a => a instanceof CSSTransition && a.playState === "running")', 'theme transitions settled');
+  await textWait(`getComputedStyle(document.documentElement).colorScheme === (${JSON.stringify(value)}==='system'?(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'):${JSON.stringify(value)})`, 'resolved Ant theme algorithm');
 }
 async function checkContrast(theme) {
   const values=await cdp.evaluate(`(() => {
     const rgb=value=>value.match(/[\\d.]+/g).slice(0,3).map(Number);
     const lum=rgb=>rgb.map(v=>{v/=255;return v<=.04045?v/12.92:((v+.055)/1.055)**2.4}).reduce((s,v,i)=>s+v*[.2126,.7152,.0722][i],0);
     const ratio=(a,b)=>{a=lum(rgb(a));b=lum(rgb(b));return (Math.max(a,b)+.05)/(Math.min(a,b)+.05)};
-    const body=getComputedStyle(document.body),muted=getComputedStyle(document.querySelector('.page-header p')),button=getComputedStyle(document.querySelector('.primary-button:not(:disabled)')),input=getComputedStyle(document.querySelector('.filter-fields input'));
-    return {body_text:ratio(body.color,body.backgroundColor),muted_text:ratio(muted.color,body.backgroundColor),primary_label:ratio(button.color,button.backgroundColor),input_border:ratio(input.borderTopColor,input.backgroundColor)};
+    const body=getComputedStyle(document.body),muted=getComputedStyle(document.querySelector('.page-header p')),button=getComputedStyle(document.querySelector('.ant-btn-primary:not(:disabled)')),input=getComputedStyle(document.querySelector('.filter-fields .ant-picker'));
+    const statistic=getComputedStyle(document.querySelector('.ant-statistic-title')),surface=getComputedStyle(document.querySelector('.summary-grid')),link=getComputedStyle(document.querySelector('.main-nav [aria-current=page]'));
+    const tags=Array.from(document.querySelectorAll('.history-section .ant-tag-success,.history-section .ant-tag-error,.history-section .ant-tag-warning')).map(el=>{const s=getComputedStyle(el);return ratio(s.color,s.backgroundColor)});
+    return {body_text:ratio(body.color,body.backgroundColor),muted_text:ratio(muted.color,body.backgroundColor),statistic_label:ratio(statistic.color,surface.backgroundColor),nav_label:ratio(link.color,body.backgroundColor),primary_label:ratio(button.color,button.backgroundColor),input_border:ratio(input.borderTopColor,input.backgroundColor),status_tags:tags};
   })()`);
   (report.contrast ??= []).push({theme,...values});
-  for(const key of ['body_text','muted_text','primary_label'])assert.ok(values[key]>=4.5,`${theme} representative ${key} contrast`);
+  for(const key of ['body_text','muted_text','statistic_label','nav_label','primary_label'])assert.ok(values[key]>=4.5,`${theme} representative ${key} contrast`);
   assert.ok(values.input_border>=3,`${theme} representative input boundary contrast`);
+  assert.ok(values.status_tags.length>=3&&values.status_tags.every(value=>value>=4.5),`${theme} mounted status Tag text contrast`);
 }
 async function checkFieldFamily(scope, label) {
-  const fields = await cdp.evaluate(`Array.from(document.querySelectorAll(${JSON.stringify(scope)})).filter(el=>el.matches('input:not([type=radio]),select,textarea')).map(el=>{
-    const style=getComputedStyle(el),box=el.getBoundingClientRect();
-    return {tag:el.tagName,type:el.type,height:box.height,width:box.width,background:style.backgroundColor,border_color:style.borderTopColor,border_width:style.borderTopWidth,border_style:style.borderTopStyle};
-  })`);
+  // Compare like-for-like idle shells, not an autofocused field against idle siblings.
+  await cdp.evaluate('document.activeElement?.blur()');
+  await textWait('!document.getAnimations().some(a => a instanceof CSSTransition && a.playState === "running")','idle field paint settled');
+  const fields = await cdp.evaluate(`(() => {
+    const shells=Array.from(document.querySelectorAll(${JSON.stringify(scope)})).filter(el=>el.matches('input:not([type=radio]),select,textarea')).map(el=>el.closest('.ant-input-affix-wrapper,.ant-picker,.ant-select')??el);
+    const select=document.querySelector('.filter-fields .ant-select');if(${JSON.stringify(label)}.startsWith('filters-')&&select)shells.push(select);
+    return Array.from(new Set(shells)).map(el=>{const style=getComputedStyle(el),box=el.getBoundingClientRect();return {tag:el.tagName,classes:el.className,height:box.height,width:box.width,background:style.backgroundColor,border_color:style.borderTopColor,border_width:style.borderTopWidth,border_style:style.borderTopStyle};});
+  })()`);
+  (report.field_families ??= []).push({ label, fields });
   assert.ok(fields.length >= 2, `${label}: mounted field family exists`);
   assert.ok(fields.every(field => field.height >= 44 && field.width > 0), `${label}: visible usable field shells`);
   const paint = ({ background, border_color, border_width, border_style }) => ({ background, border_color, border_width, border_style });
   for (const field of fields) assert.deepEqual(paint(field), paint(fields[0]), `${label}: field shell paint is consistent`);
-  (report.field_families ??= []).push({ label, fields });
 }
 async function checkMinimalShell() {
   const shell = await cdp.evaluate(`(() => {
@@ -139,30 +149,47 @@ async function checkCompactMobileHeader() {
 }
 async function checkTableKeyboard() {
   const before = await cdp.evaluate(`(() => {
-    const table=document.querySelector('.table-wrap');
+    const table=document.querySelector('.table-wrap .ant-table-content')??document.querySelector('.table-wrap .ant-table-body');
     if(!table || table.tabIndex!==0 || !table.getAttribute('aria-label'))throw Error('Named keyboard scroll region required');
     table.focus();return {left:table.scrollLeft,scrollable:table.scrollWidth>table.clientWidth};
   })()`);
   assert.ok(before.scrollable, 'Narrow viewport exercises the real scrolling table');
   await cdp.key('ArrowRight','ArrowRight',39);
-  await textWait(`document.querySelector('.table-wrap').scrollLeft > ${before.left}`, 'native keyboard table scroll');
+  await textWait(`(document.querySelector('.table-wrap .ant-table-content')??document.querySelector('.table-wrap .ant-table-body')).scrollLeft > ${before.left}`, 'native keyboard table scroll');
   report.table_keyboard_scroll = true;
-  await cdp.evaluate('document.querySelector(".table-wrap").scrollLeft=0');
+  await cdp.evaluate('(document.querySelector(".table-wrap .ant-table-content")??document.querySelector(".table-wrap .ant-table-body")).scrollLeft=0');
 }
 async function checkDialogViewport(label) {
+  const requestedWidth=label.includes('mobile-360')?360:1440;
+  await cdp.evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
   const box = await cdp.evaluate(`(() => {
-    const dialog=document.querySelector('dialog[open]');if(!dialog)throw Error('Open dialog required');
-    const b=dialog.getBoundingClientRect();return {left:b.left,top:b.top,right:b.right,bottom:b.bottom,width:innerWidth,height:innerHeight,focus_inside:dialog.contains(document.activeElement)};
+    const dialog=document.querySelector('[role="dialog"][aria-modal="true"]');if(!dialog)throw Error('Open Ant dialog required');
+    const b=dialog.getBoundingClientRect();return {left:b.left,top:b.top,right:b.right,bottom:b.bottom,width:innerWidth,height:innerHeight,root_scroll:document.documentElement.scrollWidth,visual_width:visualViewport.width,focus_inside:dialog.contains(document.activeElement),escaped:Array.from(document.querySelectorAll('body *')).map(el=>{const r=el.getBoundingClientRect();return {node:el.tagName+'.'+el.className,left:r.left,right:r.right,width:r.width};}).filter(r=>r.width>0&&r.right>${requestedWidth}+1).slice(0,24)};
   })()`);
+  (report.dialogs ??= []).push({ label, ...box });
+  assert.ok(Math.abs(box.width-requestedWidth)<=1 && box.root_scroll<=requestedWidth+1 && box.visual_width<=requestedWidth+1,`${label}: mobile/desktop viewport must not expand to hide overflow`);
   assert.ok(box.left>=-1 && box.top>=-1 && box.right<=box.width+1 && box.bottom<=box.height+1, `${label}: dialog stays inside viewport`);
   assert.ok(box.focus_inside, `${label}: focus stays in modal`);
-  (report.dialogs ??= []).push({ label, ...box });
 }
 async function checkRadioControls(label) {
-  const metrics=await cdp.evaluate(`Array.from(document.querySelectorAll('.radio-card,.importance-option')).map(card=>{const i=card.querySelector('input').getBoundingClientRect(),d=card.querySelector('span').getBoundingClientRect(),c=card.getBoundingClientRect();return {input_width:i.width,description_width:d.width,description_right:d.right,card_right:c.right};})`);
+  const metrics=await cdp.evaluate(`Array.from(document.querySelectorAll('.radio-choice')).map(card=>{const i=card.querySelector('.ant-radio').getBoundingClientRect(),d=card.querySelector('.ant-radio-label').getBoundingClientRect(),c=card.getBoundingClientRect();return {input_width:i.width,description_width:d.width,description_right:d.right,card_right:c.right};})`);
   (report.radio_controls ??= []).push({label,metrics});
   assert.equal(metrics.length,2,'Both notification modes visible');
   assert.ok(metrics.every(m=>m.input_width<=32&&m.description_width>=100&&m.description_right<=m.card_right+1),'Compact radio controls must not squeeze or clip mode descriptions');
+}
+async function checkAntTable() {
+  const result=await cdp.evaluate(`(() => {
+    const table=document.querySelector('.history-section .ant-table');
+    const headers=Array.from(table?.querySelectorAll('.ant-table-thead > tr > th')??[]).map(el=>el.textContent.trim());
+    return {mounted:!!table,headers,pagination:!!document.querySelector('.history-section .ant-pagination')};
+  })()`);
+  report.ant_table=result;
+  assert.ok(result.mounted,'Real Ant Table is mounted');
+  assert.equal(result.headers.length,5,'Five readable main columns replace nine crowded fields');
+  assert.equal(result.pagination,false,'Cursor API must not be presented as counted/client-only page pagination');
+  const preview=await cdp.evaluate(`(() => {const el=Array.from(document.querySelectorAll('.message-cell span.clamp')).find(el=>el.textContent.length===2000);if(!el)throw Error('Maximum-length row preview missing');const style=getComputedStyle(el);return {chars:el.textContent.length,display:style.display,lines:style.webkitLineClamp,height:el.getBoundingClientRect().height,line_height:parseFloat(style.lineHeight),scroll_height:el.scrollHeight};})()`);
+  report.maximum_length_preview=preview;
+  assert.ok(preview.height<=preview.line_height*2+1,'A valid 2,000-character message must remain a two-line preview, not expand the whole row');
 }
 function removeOwnedRoot() {
   const rel = relative(tmpdir(), root);
@@ -174,7 +201,7 @@ function removeOwnedRoot() {
 }
 
 try {
-  const sources = ['globals.css','console-shell.tsx','auth-form.tsx','dashboard.tsx','test/test-composer.tsx','layout.tsx','error.tsx'].map(name => join(repo,'dashboard','app',name));
+  const sources = ['app/globals.css','app/console-shell.tsx','app/auth-form.tsx','app/dashboard.tsx','app/test/test-composer.tsx','app/layout.tsx','app/error.tsx','app/ant-provider.tsx','lib/ant-theme.ts','package.json','pnpm-lock.yaml'].map(name => join(repo,'dashboard',name));
   const buildFile = join(repo,'dashboard','.next','BUILD_ID');
   assert.ok(statSync(buildFile).mtimeMs >= Math.max(...sources.map(file => statSync(file).mtimeMs)), 'Build must be newer than all changed UI sources');
   report.source = { commit:execFileSync('git',['rev-parse','HEAD'],{cwd:repo,encoding:'utf8'}).trim(), ui_sha256:createHash('sha256').update(sources.map(file => readFileSync(file)).reduce((a,b)=>Buffer.concat([a,b]),Buffer.alloc(0))).digest('hex'), build_id:readFileSync(buildFile,'utf8').trim() };
@@ -211,17 +238,17 @@ try {
   await navigate('/login');await textWait('Boolean(document.querySelector("input[name=username]"))','login form');await checkFieldFamily('.stack-form input','login-dark');await screenshot('login-dark','เข้าสู่ระบบ');
   await cdp.send('Emulation.setDeviceMetricsOverride',{width:360,height:844,deviceScaleFactor:1,mobile:true});await checkLayout(360,'login-mobile-360','เข้าสู่ระบบ');await screenshot('login-dark-mobile-360','เข้าสู่ระบบ');
   await cdp.send('Emulation.setDeviceMetricsOverride',{width:1440,height:900,deviceScaleFactor:1,mobile:false});
-  await cdp.fill('input[name=username]','admin');await cdp.fill('input[name=password]',manifest.bootstrap_password);await cdp.click('document.querySelector("form button")');
+  await cdp.fill('input[name=username]','admin');await cdp.fill('input[name=password]',manifest.bootstrap_password);await cdp.click('document.querySelector("form button[type=submit]")');
   await textWait('location.pathname === "/change-password" && Boolean(document.querySelector("input[name=new_password]"))','first login forced password change');
   const firstLimited=await cookieToken();const restricted=await pageRequest(statsPath,{token:firstLimited});assert.equal(restricted.status,403);assert.equal(restricted.data.code,'password_change_required');
   await checkFieldFamily('.stack-form input','forced-password-change');await screenshot('first-password-change','ตั้งรหัสผ่านใหม่');
   await cdp.send('Emulation.setDeviceMetricsOverride',{width:360,height:844,deviceScaleFactor:1,mobile:true});await checkLayout(360,'password-mobile-360','ตั้งรหัสผ่านใหม่');await screenshot('first-password-change-mobile-360','ตั้งรหัสผ่านใหม่');
   await cdp.send('Emulation.setDeviceMetricsOverride',{width:1440,height:900,deviceScaleFactor:1,mobile:false});
   await clickButton('ออกจากระบบ');await textWait('location.pathname === "/login"','restricted-session logout escape');assert.equal((await pageRequest(statsPath,{token:firstLimited})).status,401);
-  await cdp.fill('input[name=username]','admin');await cdp.fill('input[name=password]',manifest.bootstrap_password);await cdp.click('document.querySelector("form button")');await textWait('location.pathname === "/change-password" && Boolean(document.querySelector("input[name=new_password]"))','restricted login again');
+  await cdp.fill('input[name=username]','admin');await cdp.fill('input[name=password]',manifest.bootstrap_password);await cdp.click('document.querySelector("form button[type=submit]")');await textWait('location.pathname === "/change-password" && Boolean(document.querySelector("input[name=new_password]"))','restricted login again');
   const limited=await cookieToken();
   const nextPassword=`Synthetic new passphrase ${randomUUID()}`;
-  await cdp.fill('input[name=current_password]',manifest.bootstrap_password);await cdp.fill('input[name=new_password]',nextPassword);await cdp.fill('input[name=confirm]',nextPassword);await cdp.click('document.querySelector("form button")');
+  await cdp.fill('input[name=current_password]',manifest.bootstrap_password);await cdp.fill('input[name=new_password]',nextPassword);await cdp.fill('input[name=confirm]',nextPassword);await cdp.click('document.querySelector("form button[type=submit]")');
   await textWait('location.pathname === "/" && Boolean(document.querySelector("nav[aria-label=เมนูหลัก]"))','password changed and history loaded');
   await checkMinimalShell();
   await textWait('document.body.innerText.includes("ยังไม่มีประวัติในช่วงเวลานี้")','initial empty history');await screenshot('history-empty','ยังไม่มีประวัติในช่วงเวลานี้');
@@ -231,8 +258,12 @@ try {
   await checkFieldFamily('.stack-form input,.stack-form textarea','composer-dark');await checkRadioControls('composer-desktop');await screenshot('composer-dark-desktop','ธรรมดา · เงียบ');
   await cdp.send('Emulation.setDeviceMetricsOverride',{width:360,height:844,deviceScaleFactor:1,mobile:true});await checkCompactMobileHeader();await checkRadioControls('composer-mobile-360');await checkLayout(360,'composer-mobile-360');await screenshot('composer-dark-mobile-360','ธรรมดา · เงียบ');
   await cdp.send('Emulation.setDeviceMetricsOverride',{width:1440,height:900,deviceScaleFactor:1,mobile:false});
+  assert.equal(await cdp.evaluate('document.querySelectorAll("input[name=importance]").length'),2,'Ant group must expose both stable native radio fields');
   assert.equal(await cdp.evaluate('document.querySelector("input[name=importance]").checked'),true);
-  await cdp.fill('input[name=title]','ทดสอบเงียบจาก browser จำลอง');await cdp.fill('textarea[name=message]','ข้อมูลสังเคราะห์เท่านั้น <b>ไม่ใช่ HTML</b> ไม่มีการส่ง FCM จริง');assert.equal((await control('fail-create-response')).status,200);await cdp.click('document.querySelector("form button")');
+  const prefix='ข้อมูลสังเคราะห์เท่านั้น <b>ไม่ใช่ HTML</b> ไม่มีการส่ง FCM จริง ';
+  const longMessage=prefix+'Synthetic message only. '.repeat(100).slice(0,2000-prefix.length);
+  assert.equal(longMessage.length,2000);
+  await cdp.fill('input[name=title]','ทดสอบเงียบจาก browser จำลอง');await cdp.fill('textarea[name=message]',longMessage);assert.equal((await control('fail-create-response')).status,200);await cdp.click('document.querySelector("form button[type=submit]")');
   await textWait('document.body.innerText.includes("ระบบไม่พร้อมใช้งานชั่วคราว")','lost create receipt is unknown, not a new send');
   assert.equal((await control('inspect')).data.send_calls,1);await screenshot('uncertain-send-before-retry','ตรวจสอบประวัติ');
   await cdp.click('Array.from(document.querySelectorAll("button")).find(b=>b.textContent.includes("คำขอเดิม"))');
@@ -242,14 +273,15 @@ try {
   check('unknown create outcome retries the same attempt through real BFF/Go without a second synthetic provider call');
   await screenshot('normal-awaiting-ack','ผลผู้ให้บริการ / รายงานแตะ');
   await cdp.click('Array.from(document.querySelectorAll("label")).find(e=>e.textContent.includes("วิกฤต · ปลุก"))');
-  await cdp.fill('input[name=title]','ทดสอบวิกฤตจำลอง ไม่มีเสียงจริง');await cdp.click('document.querySelector("form button")');
-  await textWait('Boolean(document.querySelector("dialog[open]"))','critical confirmation');assert.equal((await control('inspect')).data.send_calls,1);
+  await cdp.fill('input[name=title]','ทดสอบวิกฤตจำลอง ไม่มีเสียงจริง');await cdp.click('document.querySelector("form button[type=submit]")');
+  await textWait('Boolean(document.querySelector("[role=dialog][aria-modal=true]"))','critical confirmation');assert.equal((await control('inspect')).data.send_calls,1);
+  await textWait('document.activeElement?.textContent.trim() === "ยกเลิก"','Critical confirmation initially focuses Cancel');
   await screenshot('critical-confirmation','TTL ไม่ใช่เวลาหยุดเสียง');
   await cdp.send('Emulation.setDeviceMetricsOverride',{width:360,height:844,deviceScaleFactor:1,mobile:true});await checkDialogViewport('critical-mobile-360');await screenshot('critical-confirmation-mobile-360','ยืนยันส่งแบบวิกฤต?');
-  await cdp.key('Escape','Escape',27);await textWait('!document.querySelector("dialog[open]")','cancel critical confirmation');assert.equal((await control('inspect')).data.send_calls,1);
+  await cdp.key('Escape','Escape',27);await textWait('!document.querySelector("[role=dialog][aria-modal=true]")','cancel critical confirmation');assert.equal((await control('inspect')).data.send_calls,1);
   await cdp.send('Emulation.setDeviceMetricsOverride',{width:1440,height:900,deviceScaleFactor:1,mobile:false});
-  await cdp.click('document.querySelector("form button")');await textWait('Boolean(document.querySelector("dialog[open]"))','critical confirmation again');
-  await cdp.click('Array.from(document.querySelector("dialog[open]").querySelectorAll("button")).find(e=>e.textContent.includes("ยืนยัน"))');
+  await cdp.click('document.querySelector("form button[type=submit]")');await textWait('Boolean(document.querySelector("[role=dialog][aria-modal=true]"))','critical confirmation again');
+  await cdp.click('Array.from(document.querySelector("[role=dialog][aria-modal=true]").querySelectorAll("button")).find(e=>e.textContent.includes("ยืนยัน"))');
   await waitFor(async()=> (await control('inspect')).data.send_calls===2,'synthetic critical accepted');
   const sent=(await control('inspect')).data;assert.deepEqual(Object.values(sent.importance).sort(),['critical','normal']);
   const action=randomUUID(), clientAt=new Date().toISOString();
@@ -258,7 +290,10 @@ try {
   const stats=await pageRequest(statsPath,{token:full});assert.equal(stats.status,200);assert.equal(stats.data.total_alerts,2);assert.equal(stats.data.acknowledged,2);assert.equal(stats.data.ack_action_count,1);
   await screenshot('synthetic-ack-received','เซิร์ฟเวอร์รับครั้งแรก');
   check('normal default, critical confirmation/cancel, real Go reservation + synthetic sender only');check('normal/critical capability Ack and duplicate retries persist through PostgreSQL; shared action counted once');
-  await navigate('/');await textWait('document.body.innerText.includes("ทดสอบเงียบจาก browser จำลอง")','history after Ack');await checkLayout(1440,'desktop');await checkFieldFamily('.filter-fields input,.filter-fields select','filters-dark');await checkContrast('dark');await screenshot('history-dark-desktop','ประวัติ');
+  await navigate('/');await textWait('document.body.innerText.includes("ทดสอบเงียบจาก browser จำลอง")','history after Ack');await checkAntTable();await checkLayout(1440,'desktop');await checkFieldFamily('.filter-fields input,.filter-fields select','filters-dark');await checkContrast('dark');await screenshot('history-dark-desktop','ประวัติ');
+  await cdp.evaluate('document.querySelector(".history-section").scrollIntoView({block:"start"})');await screenshot('history-table-dark-desktop','ผลผู้ให้บริการ');await cdp.evaluate('window.scrollTo(0,0)');
+  const dateBefore=await cdp.evaluate('document.querySelector(".filter-fields .ant-picker input").value');
+  await cdp.click('document.querySelector(".filter-fields .ant-picker input")');await textWait('Boolean(document.querySelector(".ant-picker-dropdown:not(.ant-picker-dropdown-hidden) .ant-picker-panel"))','real Ant DatePicker calendar opens');await screenshot('calendar-dark-desktop','ตั้งแต่วันที่');await cdp.key('Escape','Escape',27);await textWait('!document.querySelector(".ant-picker-dropdown:not(.ant-picker-dropdown-hidden)")','calendar Escape');assert.equal(await cdp.evaluate('document.querySelector(".filter-fields .ant-picker input").value'),dateBefore,'Closing calendar without a selection must not change the filter');
   await chooseTheme('light');await checkFieldFamily('.filter-fields input,.filter-fields select','filters-light');await checkContrast('light');await screenshot('history-light-desktop','ประวัติ');await navigate('/');assert.equal(await cdp.evaluate('document.documentElement.dataset.theme'),'light');
   await chooseTheme('system');await cdp.send('Emulation.setEmulatedMedia',{features:[{name:'prefers-color-scheme',value:'dark'}]});await screenshot('history-system-dark','ประวัติ');await chooseTheme('dark');
   await cdp.send('Emulation.setDeviceMetricsOverride',{width:1024,height:768,deviceScaleFactor:1,mobile:false});await checkLayout(1024,'desktop-1024');await screenshot('history-dark-desktop-1024','ประวัติ');
@@ -267,10 +302,10 @@ try {
   await checkTableKeyboard();
   await cdp.send('Emulation.setDeviceMetricsOverride',{width:720,height:450,deviceScaleFactor:2,mobile:false});await checkLayout(720,'200pct-equivalent');await screenshot('history-200pct-equivalent','ประวัติ');
   await cdp.send('Emulation.setDeviceMetricsOverride',{width:1440,height:900,deviceScaleFactor:1,mobile:false});
-  await cdp.click('Array.from(document.querySelectorAll("button")).find(e=>e.textContent.includes("รายละเอียด"))');await textWait('Boolean(document.querySelector("dialog[open] .detail-fields"))','loaded detail dialog');await checkDialogViewport('detail-desktop');await screenshot('alert-detail-timeline','รายละเอียด');
+  await cdp.click('Array.from(document.querySelectorAll("button")).find(e=>e.textContent.includes("รายละเอียด"))');await textWait('Boolean(document.querySelector("[role=dialog][aria-modal=true] .detail-fields"))','loaded detail dialog');await checkDialogViewport('detail-desktop');await screenshot('alert-detail-timeline','รายละเอียด');
   await cdp.send('Emulation.setDeviceMetricsOverride',{width:360,height:844,deviceScaleFactor:1,mobile:true});await checkDialogViewport('detail-mobile-360');await screenshot('alert-detail-mobile-360','รายละเอียด');
-  await cdp.key('Escape','Escape',27);await textWait('!document.querySelector("dialog[open]")','detail Escape');await cdp.send('Emulation.setDeviceMetricsOverride',{width:1440,height:900,deviceScaleFactor:1,mobile:false});
-  check('dark/light/system persistence, desktop/mobile and 200%-equivalent reflow, native detail dialog keyboard Escape');
+  await cdp.key('Escape','Escape',27);await textWait('!document.querySelector("[role=dialog][aria-modal=true]")','detail Escape');await cdp.send('Emulation.setDeviceMetricsOverride',{width:1440,height:900,deviceScaleFactor:1,mobile:false});
+  check('dark/light/system persistence, desktop/mobile and 200%-equivalent reflow, Ant modal keyboard Escape');
   assert.equal((await control('seed-history')).data.seeded,26);
   await navigate('/');await textWait('Boolean(Array.from(document.querySelectorAll("button")).find(b=>b.textContent.trim()==="โหลดเพิ่มเติม"))','real PostgreSQL cursor page');
   assert.equal((await control('fail-pagination')).status,200);await clickButton('โหลดเพิ่มเติม');
@@ -283,8 +318,8 @@ try {
   await textWait('document.body.innerText.includes("โหลดแล้ว 28 รายการ")','pagination retry appends actual remaining rows');
   await screenshot('pagination-retry-recovered','โหลดแล้ว 28 รายการ');check('cursor-page transport error can be retried without duplicate rows or changed filters');
   await clickButton('ออกจากระบบ');await textWait('location.pathname === "/login"','logout navigation');assert.equal((await pageRequest(statsPath,{token:full})).status,401);assert.equal((await pageRequest(statsPath)).status,401);
-  await cdp.fill('input[name=username]','admin');await cdp.fill('input[name=password]',manifest.bootstrap_password);await cdp.click('document.querySelector("form button")');await textWait('document.body.innerText.includes("ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง")','bootstrap credential no longer logs in');
-  await cdp.fill('input[name=password]',nextPassword);await cdp.click('document.querySelector("form button")');await textWait('location.pathname === "/"','new password works after logout');
+  await cdp.fill('input[name=username]','admin');await cdp.fill('input[name=password]',manifest.bootstrap_password);await cdp.click('document.querySelector("form button[type=submit]")');await textWait('document.body.innerText.includes("ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง")','bootstrap credential no longer logs in');
+  await cdp.fill('input[name=password]',nextPassword);await cdp.click('document.querySelector("form button[type=submit]")');await textWait('location.pathname === "/"','new password works after logout');
   check('logout revokes old cookie; original bootstrap fails; new password succeeds');
   report.runtime_errors=cdp.errors;assert.deepEqual(cdp.errors,[],'No unhandled browser runtime/console errors');report.passed=true;
 } catch (error) {

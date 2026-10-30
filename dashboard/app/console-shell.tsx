@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useEffect, useState } from 'react';
+import { Alert, Button, ConfigProvider, Select } from 'antd';
 import { clientJSON } from '@/lib/client';
 
 export default function ConsoleShell({ username, children }: { username: string; children: React.ReactNode }) {
@@ -42,11 +43,11 @@ export default function ConsoleShell({ username, children }: { username: string;
         <Link href="/test" aria-current={path === '/test' ? 'page' : undefined}>ส่งทดสอบ</Link>
       </nav>
       <div className="account-controls">
-        <label className="theme-control"><span className="sr-only">รูปแบบสี</span><select aria-label="รูปแบบสี" value={theme} onChange={(event) => changeTheme(event.target.value)}><option value="dark">มืด</option><option value="light">สว่าง</option><option value="system">ตามระบบ</option></select></label>
+        <ConfigProvider theme={{ token: { fontSize: 14 } }}><Select className="theme-control" aria-label="รูปแบบสี" value={theme} onChange={changeTheme} options={[{ value: 'dark', label: 'มืด' }, { value: 'light', label: 'สว่าง' }, { value: 'system', label: 'ตามระบบ' }]} /></ConfigProvider>
         <Link href="/change-password" className="account-link">{username}</Link>
-        <button className="secondary-button" onClick={logout} disabled={busy}>{busy ? 'กำลังออก…' : 'ออกจากระบบ'}</button>
+        <Button onClick={logout} loading={busy}>ออกจากระบบ</Button>
       </div>
     </div></header>
-    <div className="workspace">{error && <p role="alert" className="error">{error}</p>}<div id="content">{children}</div></div>
+    <div className="workspace">{error && <Alert type="error" showIcon message={error} /> }<div id="content">{children}</div></div>
   </div>;
 }
