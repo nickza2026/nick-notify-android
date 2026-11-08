@@ -30,6 +30,14 @@ func NewFCM(credentialsPath, deviceToken string) (*FCM, error) {
 	if credentialsPath == "" || deviceToken == "" {
 		return nil, errors.New("fcm_not_configured")
 	}
+	return NewFCMProvider(credentialsPath, deviceToken)
+}
+
+// NewFCMProvider enables registered-device sends without a static device token.
+func NewFCMProvider(credentialsPath, deviceToken string) (*FCM, error) {
+	if credentialsPath == "" {
+		return nil, errors.New("fcm_not_configured")
+	}
 	b, e := os.ReadFile(credentialsPath)
 	if e != nil {
 		return nil, errors.New("invalid_fcm_configuration")
@@ -49,6 +57,14 @@ func NewFCM(credentialsPath, deviceToken string) (*FCM, error) {
 	return &FCM{token: deviceToken, project: meta.Project, source: c.TokenSource(context.WithValue(context.Background(), oauth2.HTTPClient, client)), client: client}, nil
 }
 func (s *FCM) Send(ctx context.Context, data map[string]string, ttl int) error {
+	if s.token == "" {
+		return &SendError{Code: "no_devices_registered"}
+	}
+	return s.SendTo(ctx, s.token, data, ttl)
+}
+func (s *FCM) HasLegacyTarget() bool { return s.token != "" }
+func (s *FCM) LegacyToken() string   { return s.token }
+func (s *FCM) SendTo(ctx context.Context, target string, data map[string]string, ttl int) error {
 	t, e := s.source.Token()
 	if e != nil {
 		return &SendError{Code: "provider_authentication_failed"}
@@ -70,7 +86,7 @@ func (s *FCM) Send(ctx context.Context, data map[string]string, ttl int) error {
 	} else if data["importance"] != "critical" {
 		return &SendError{Code: "invalid_importance"}
 	}
-	b, _ := json.Marshal(map[string]any{"message": map[string]any{"token": s.token, "data": data, "android": map[string]any{"priority": priority, "ttl": fmt.Sprintf("%ds", ttl)}}})
+	b, _ := json.Marshal(map[string]any{"message": map[string]any{"token": target, "data": data, "android": map[string]any{"priority": priority, "ttl": fmt.Sprintf("%ds", ttl)}}})
 	req, e := http.NewRequestWithContext(ctx, "POST", "https://fcm.googleapis.com/v1/projects/"+s.project+"/messages:send", bytes.NewReader(b))
 	if e != nil {
 		return &SendError{Code: "provider_delivery_unknown", Ambiguous: true}
@@ -85,6 +101,20 @@ func (s *FCM) Send(ctx context.Context, data map[string]string, ttl int) error {
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		if resp.StatusCode >= 500 || resp.StatusCode == http.StatusRequestTimeout || resp.StatusCode == http.StatusTooManyRequests {
 			return &SendError{Code: "provider_delivery_unknown", Ambiguous: true}
+		}
+		var detail struct {
+			Error struct {
+				Details []struct {
+					ErrorCode string `json:"errorCode"`
+				} `json:"details"`
+			} `json:"error"`
+		}
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		_ = json.Unmarshal(body, &detail)
+		for _, d := range detail.Error.Details {
+			if d.ErrorCode == "UNREGISTERED" {
+				return &SendError{Code: "provider_unregistered"}
+			}
 		}
 		return &SendError{Code: "provider_rejected"}
 	}

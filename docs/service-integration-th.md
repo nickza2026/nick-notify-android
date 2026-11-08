@@ -61,7 +61,7 @@ Content-Type: application/json
 
 รองรับ JSON เท่านั้น ไม่รับ field ที่ไม่รู้จักหรือ explicit null; body สูงสุด 16,384 bytes และ FCM payload ที่รวมข้อความ/ID/expiry/capability URL ต้องไม่เกิน 4,000 UTF-8 bytes ดังนั้นข้อความยาวที่ผ่านจำนวนตัวอักษรยังอาจเกิน byte budget ได้
 
-Target ปัจจุบันเป็น Pixel ตัวเดียวตาม `FCM_DEVICE_TOKEN` ใน backend ไม่รับ token/target หลายเครื่องจาก request อย่าส่ง `device_token` หรือ `target` เพิ่มเองเพราะไม่อยู่ใน schema
+Target แบบ legacy เป็นเครื่องตาม `FCM_DEVICE_TOKEN`; ส่วนขยายบัญชีเดียวหลายเครื่องให้ APK login/ลงทะเบียนกับ public key ID แล้ว server กระจายหนึ่งเหตุการณ์ให้ปลายทางที่ลงทะเบียนตาม [สัญญา shared devices](fe-shared-devices-th.md) ระบบส่งยังใช้ body เดิม ไม่รับ token/target หลายเครื่องจาก request อย่าส่ง `device_token` หรือ `target` เพิ่มเองเพราะไม่อยู่ใน schema การ retry คำขอเดิมไม่เพิ่มผู้รับหรือกระจายซ้ำตามทะเบียนที่เพิ่งเปลี่ยน
 
 PowerShell ตัวอย่าง (เป็นเอกสารเท่านั้น อย่าเรียกกับระบบจริงโดยไม่ตั้งใจ):
 

@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
 import { Alert, Button, Descriptions, Input, Modal, Radio, Timeline } from 'antd';
 import { ClientError, clientJSON } from '@/lib/client';
-import { ackLabel, count, formatTime, providerLabel, type AlertDetail } from '@/lib/protocol';
+import { acknowledgementIdentity, ackLabel, count, formatTime, providerLabel, type AlertDetail } from '@/lib/protocol';
 
 type Payload = { alert_id: string; title: string; message: string; ttl_seconds: number; importance: 'normal' | 'critical' };
 type Attempt = { body: Payload; key: string };
@@ -100,7 +100,7 @@ export default function TestComposer() {
     setTimeout(() => submitButton.current?.focus(), 0);
   }
 
-  const unique = detail ? [...new Map(detail.ack_actions.map((action) => [action.client_action_id, action])).values()] : [];
+  const unique = detail ? [...new Map(detail.ack_actions.map((action) => [acknowledgementIdentity(action), action])).values()] : [];
   return <main className="shell composer-shell">
     <header className="page-header"><div><span className="eyebrow">ทดสอบการแจ้งเตือน</span><h1>ส่งทดสอบ</h1><p>ส่งไปยังอุปกรณ์ที่ตั้งค่าไว้บนเซิร์ฟเวอร์ และตรวจสอบรายงานแตะรับทราบจริงจากมือถือ</p></div></header>
     <div className="composer-grid">
@@ -138,7 +138,7 @@ export default function TestComposer() {
           {polling && <p role="status" className="muted">กำลังตรวจรายงานแตะทุก 4 วินาที (สูงสุด 2 นาที)</p>}
           {!polling && <p className="muted">หยุดตรวจอัตโนมัติแล้ว ดูข้อมูลล่าสุดได้ที่ประวัติ</p>}
           {pollError && <Alert type="warning" showIcon message={`${pollError} — ข้อมูลเดิมอาจไม่เป็นปัจจุบัน`} />}
-          {unique.length > 0 && <Timeline className="timeline" items={unique.map((action) => ({ children: <><strong>เซิร์ฟเวอร์รับ: {formatTime(action.received_at)}</strong><span>เวลาอุปกรณ์: {formatTime(action.client_acked_at)}</span><small className="break">{action.client_action_id}</small></> }))} />}
+          {unique.length > 0 && <Timeline className="timeline" items={unique.map((action) => ({ children: <><strong>เซิร์ฟเวอร์รับ: {formatTime(action.received_at)}</strong><span>เครื่อง: {action.device_name ?? 'รายการเดิม ไม่ระบุเครื่อง'}</span><span>เวลาอุปกรณ์: {formatTime(action.client_acked_at)}</span><small className="break">{action.client_action_id}</small></> }))} />}
           {error && <Button disabled={busy} onClick={() => void send(attempt)}>ลองคำขอเดิม (รหัสและข้อมูลเดิม)</Button>}
           <p><Link className="text-link" href="/">ตรวจสอบประวัติทั้งหมด →</Link></p>
         </>}

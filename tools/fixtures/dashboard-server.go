@@ -31,9 +31,21 @@ type syntheticSender struct {
 	mu    sync.Mutex
 	items map[string]map[string]string
 	calls int
+	targets map[string]map[string]map[string]string
 }
 
 func (s *syntheticSender) Send(_ context.Context, data map[string]string, _ int) error {
+	return s.record("", data)
+}
+
+func (s *syntheticSender) HasLegacyTarget() bool { return true }
+func (s *syntheticSender) LegacyToken() string { return "SYNTHETIC_FCM_ORIGINAL_PIXEL_001" }
+
+func (s *syntheticSender) SendTo(_ context.Context, token string, data map[string]string, _ int) error {
+	return s.record(token, data)
+}
+
+func (s *syntheticSender) record(token string, data map[string]string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.calls++
@@ -42,6 +54,11 @@ func (s *syntheticSender) Send(_ context.Context, data map[string]string, _ int)
 		copy[k] = v
 	}
 	s.items[data["alert_id"]] = copy
+	if token != "" {
+		if s.targets == nil { s.targets = map[string]map[string]map[string]string{} }
+		if s.targets[data["alert_id"]] == nil { s.targets[data["alert_id"]] = map[string]map[string]string{} }
+		s.targets[data["alert_id"]][token] = copy
+	}
 	return nil // Synthetic acceptance, not FCM or actual device delivery.
 }
 
@@ -94,7 +111,9 @@ func run() (runErr error) {
 		return errors.New("isolated fixture bootstrap failed")
 	}
 	sender := &syntheticSender{items: map[string]map[string]string{}}
-	api := &backend.API{DB: db, Key: key, Sender: sender, AckBase: "https://api.synthetic.invalid", RequestsPerMinute: 10000, InvalidPerMinute: 10000}
+	tokenKey := make([]byte, 32)
+	if _, err := rand.Read(tokenKey); err != nil { return errors.New("synthetic token encryption key unavailable") }
+	api := &backend.API{DB: db, Key: key, DeviceTokenKey: tokenKey, Sender: sender, AckBase: "https://api.synthetic.invalid", RequestsPerMinute: 10000, InvalidPerMinute: 10000}
 	handler, err := api.Handler()
 	if err != nil {
 		return err
@@ -210,6 +229,7 @@ func run() (runErr error) {
 				ID       string `json:"alert_id"`
 				Action   string `json:"client_action_id"`
 				ClientAt string `json:"client_acked_at"`
+				Target   string `json:"target_token"`
 			}
 			if json.NewDecoder(http.MaxBytesReader(w, r.Body, 2048)).Decode(&v) != nil {
 				w.WriteHeader(400)
@@ -217,6 +237,7 @@ func run() (runErr error) {
 			}
 			sender.mu.Lock()
 			capability := sender.items[v.ID]["ack_token"]
+			if v.Target != "" { capability = sender.targets[v.ID][v.Target]["ack_token"] }
 			sender.mu.Unlock()
 			if capability == "" {
 				w.WriteHeader(404)
@@ -237,7 +258,9 @@ func run() (runErr error) {
 			for id, data := range sender.items {
 				items[id] = data["importance"]
 			}
-			_ = json.NewEncoder(w).Encode(map[string]any{"send_calls": sender.calls, "importance": items, "cursor_calls": cursorCalls.Load(), "create_requests": createRequests.Load()})
+			targetCounts := map[string]int{}
+			for id, targets := range sender.targets { targetCounts[id] = len(targets) }
+			_ = json.NewEncoder(w).Encode(map[string]any{"send_calls": sender.calls, "importance": items, "target_counts": targetCounts, "cursor_calls": cursorCalls.Load(), "create_requests": createRequests.Load()})
 			sender.mu.Unlock()
 		case "/__fixture/stop":
 			fmt.Fprint(w, `{"ok":true}`)

@@ -41,6 +41,7 @@ export default function ConsoleShell({ username, children }: { username: string;
       <nav className="main-nav" aria-label="เมนูหลัก">
         <Link href="/" aria-current={path === '/' ? 'page' : undefined}>ประวัติแจ้งเตือน</Link>
         <Link href="/test" aria-current={path === '/test' ? 'page' : undefined}>ส่งทดสอบ</Link>
+        <Link href="/devices" aria-current={path === '/devices' ? 'page' : undefined}>อุปกรณ์</Link>
       </nav>
       <div className="account-controls">
         <ConfigProvider theme={{ token: { fontSize: 14 } }}><Select className="theme-control" aria-label="รูปแบบสี" value={theme} onChange={changeTheme} options={[{ value: 'dark', label: 'มืด' }, { value: 'light', label: 'สว่าง' }, { value: 'system', label: 'ตามระบบ' }]} /></ConfigProvider>

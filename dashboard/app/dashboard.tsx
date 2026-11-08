@@ -6,7 +6,7 @@ import type { TableColumnsType } from 'antd';
 import dayjs from 'dayjs';
 import { clientJSON } from '@/lib/client';
 import { beginNextPage, finishNextPage, historyGeneration, historyReady } from '@/lib/history-pagination';
-import { ackLabel, bangkokDate, count, dateBounds, formatTime, importanceLabel, providerLabel, statuses, type AlertDetail, type AlertSummary, type HistoryResponse, type Importance, type StatsResponse, type StatusFilter } from '@/lib/protocol';
+import { acknowledgementIdentity, ackLabel, bangkokDate, count, dateBounds, formatTime, importanceLabel, providerLabel, statuses, type AlertDetail, type AlertSummary, type HistoryResponse, type Importance, type StatsResponse, type StatusFilter } from '@/lib/protocol';
 
 type Filter = { from: string; to: string; status: StatusFilter };
 type LoadState = 'loading' | 'ready' | 'error';
@@ -37,8 +37,8 @@ function Summary({ stats, state, error }: { stats: StatsResponse | null; state: 
     { title: 'เหตุการณ์ทั้งหมด', number: stats?.total_alerts, note: 'ตามช่วงเวลาที่เลือก' },
     { title: 'ผู้ให้บริการรับคำขอ', number: stats?.provider_accepted, note: 'ไม่ยืนยันว่าอุปกรณ์ได้รับหรือส่งเสียง' },
     { title: 'ส่งไม่สำเร็จ / ไม่ทราบผล', number: `${count(stats?.provider_failed)} / ${count(stats?.delivery_unknown)}`, note: 'แยกจำนวนปฏิเสธและผลที่ไม่ทราบ' },
-    { title: 'มีรายงานแตะ / รอรายงาน', number: `${count(stats?.acknowledged)} / ${count(stats?.pending_ack)}`, note: 'เป็นจำนวนเหตุการณ์ ไม่ใช่จำนวนครั้งที่แตะ' },
-    { title: 'จำนวนการแตะที่รายงาน', number: stats?.ack_action_count, note: 'นับ client_action_id ไม่ซ้ำข้ามเหตุการณ์' },
+    { title: 'มีรายงานแตะ / รอรายงาน', number: `${count(stats?.acknowledged)} / ${count(stats?.pending_ack)}`, note: 'มีอย่างน้อยหนึ่งเครื่องรายงาน ไม่ได้หมายถึงครบทุกเครื่อง' },
+    { title: 'จำนวนการแตะที่รายงาน', number: stats?.ack_action_count, note: 'นับ client_action_id ไม่ซ้ำข้ามเหตุการณ์ แยกต่อเครื่อง' },
   ];
   return <section aria-labelledby="summary-title" className="section">
     <div className="section-heading"><div><h2 id="summary-title">ภาพรวมตามช่วงเวลา</h2><p>ภาพรวมไม่ใช้ตัวกรองสถานะของรายการ</p></div></div>
@@ -61,7 +61,7 @@ function Detail({ id, onClose }: { id: string; onClose: () => void }) {
     return () => controller.abort();
   }, [id]);
   const actions = detail?.ack_actions ?? [];
-  const unique = [...new Map(actions.map((action) => [action.client_action_id, action])).values()].sort((a, b) => Date.parse(a.received_at) - Date.parse(b.received_at));
+  const unique = [...new Map(actions.map((action) => [acknowledgementIdentity(action), action])).values()].sort((a, b) => Date.parse(a.received_at) - Date.parse(b.received_at));
   return <Modal open centered title={<span id="detail-title">{detail?.title ?? 'รายละเอียดเหตุการณ์'}</span>} onCancel={onClose} footer={null} destroyOnHidden width={640} styles={{ container: { maxHeight: 'calc(100dvh - 64px)', display: 'flex', flexDirection: 'column' }, header: { flexShrink: 0 }, body: { minHeight: 0, overflowY: 'auto' } }} aria-labelledby="detail-title" closeIcon={<span aria-label="ปิดรายละเอียด">×</span>}>
     {error && <Alert type="error" showIcon message={error} />}
     {!detail && !error && <div role="status" aria-label="กำลังโหลดรายละเอียด"><Skeleton active /></div>}
@@ -78,9 +78,15 @@ function Detail({ id, onClose }: { id: string; onClose: () => void }) {
         { key: 'last', label: 'ครั้งล่าสุดที่เซิร์ฟเวอร์รับการแตะ', children: <Time value={detail.last_ack_at} /> },
         { key: 'count', label: 'จำนวนการแตะที่รายงานสำหรับเหตุการณ์นี้', children: count(detail.ack_count) },
       ]} />
+      {detail.deliveries && detail.deliveries.length > 0 && <><h3>ผลรายเครื่อง</h3><p className="muted">ผู้ให้บริการรับคำขอไม่ใช่หลักฐานว่ามือถือได้รับหรือส่งเสียง รับทราบเครื่องหนึ่งไม่หยุดเสียงเครื่องอื่น</p><div className="table-wrap"><Table rowKey="device_id" dataSource={detail.deliveries} pagination={false} size="small" scroll={{ x: 650 }} columns={[
+        { title: 'อุปกรณ์', dataIndex: 'device_name', key: 'name', width: 170, render: (value: string) => <span className="break">{value}</span> },
+        { title: 'ผลผู้ให้บริการ', dataIndex: 'status', key: 'status', width: 170, render: (value: string) => value === 'provider_accepted' ? 'ผู้ให้บริการรับคำขอแล้ว' : value === 'provider_failed' ? 'ส่งไม่สำเร็จ' : 'ไม่ทราบผลส่ง' },
+        { title: 'รายงานรับทราบ', dataIndex: 'acknowledged_at', key: 'ack', width: 190, render: (value: string | null) => value ? <Time value={value} /> : 'ยังไม่มีรายงานรับทราบ' },
+        { title: 'จำนวนแตะ', dataIndex: 'ack_count', key: 'count', width: 120, render: (value: number | null) => count(value) },
+      ]} /></div></>}
       {typeof detail.ack_count === 'number' && detail.ack_count !== unique.length && <Alert type="warning" showIcon message={`จำนวนการแตะไม่ตรงกับรายการการแตะที่ได้รับ (${count(unique.length)} รายการ) — โปรดตรวจสอบข้อมูลต้นทาง`} />}
       <h3>ลำดับการแตะที่รายงาน</h3><p className="muted">เวลาที่เซิร์ฟเวอร์รับเป็นหลัก เวลาอุปกรณ์เป็นข้อมูลประกอบและอาจคลาดเคลื่อน</p>
-      {unique.length === 0 ? <Empty description="ไม่มีรายการการแตะที่รายงาน" /> : <Timeline className="timeline" items={unique.map((action) => ({ children: <><strong><Time value={action.received_at} /></strong><span>เวลาอุปกรณ์: <Time value={action.client_acked_at} /></span><small className="break">รหัสการแตะ: {action.client_action_id}</small></> }))} />}
+      {unique.length === 0 ? <Empty description="ไม่มีรายการการแตะที่รายงาน" /> : <Timeline className="timeline" items={unique.map((action) => ({ children: <><strong><Time value={action.received_at} /></strong><span>เครื่อง: {action.device_name ?? 'รายการเดิม ไม่ระบุเครื่อง'}</span><span>เวลาอุปกรณ์: <Time value={action.client_acked_at} /></span><small className="break">รหัสการแตะ: {action.client_action_id}</small></> }))} />}
     </div>}
   </Modal>;
 }

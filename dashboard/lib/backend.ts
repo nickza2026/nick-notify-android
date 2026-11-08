@@ -1,13 +1,14 @@
 import 'server-only';
 import { readFile } from 'node:fs/promises';
 import { NextResponse } from 'next/server';
-import { parseHistory, parseStats, parseDetail, validUtc } from './protocol';
+import { parseHistory, parseStats, parseDetail, parseDevices, validDeviceId, validUtc } from './protocol';
 import { authDTO, backendURL, boundedJSON, publicConfig, sessionToken, tokenPattern, trustedRequest } from './security';
 
 const messages: Record<string,string> = { session_required:'กรุณาเข้าสู่ระบบ', password_change_required:'กรุณาเปลี่ยนรหัสผ่านก่อนใช้งาน', invalid_credentials:'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง', invalid_schema:'ข้อมูลคำขอไม่ถูกต้อง', invalid_password:'รหัสผ่านต้องมีอย่างน้อย 15 ตัวอักษร และไม่เกิน 128 ไบต์', password_unchanged:'รหัสผ่านใหม่ต้องต่างจากเดิม', rate_limited:'คำขอมากเกินไป กรุณารอแล้วลองใหม่', dashboard_not_configured:'ระบบยังไม่พร้อมใช้งาน', temporarily_unavailable:'ระบบไม่พร้อมใช้งานชั่วคราว', server_configuration:'การตั้งค่าเซิร์ฟเวอร์ไม่ถูกต้อง', invalid_origin:'ไม่อนุญาตคำขอจากต้นทางนี้', upstream_error:'ไม่สามารถยืนยันผลจากเซิร์ฟเวอร์ได้ โปรดตรวจสอบประวัติก่อนส่งอีกครั้ง' };
 Object.assign(messages, { invalid_message:'หัวข้อหรือข้อความไม่ถูกต้อง',invalid_alert_id:'รหัสเหตุการณ์ไม่ถูกต้อง',invalid_ttl:'TTL ไม่ถูกต้อง',invalid_importance:'ระดับแจ้งเตือนไม่ถูกต้อง',payload_too_large:'ข้อความมีขนาดไบต์เกินกำหนด',idempotency_key_required:'ต้องระบุรหัสคำขอ',idempotency_conflict:'รหัสคำขอนี้ถูกใช้กับข้อมูลอื่นแล้ว',alert_id_conflict:'รหัสเหตุการณ์ถูกใช้แล้ว',not_found:'ไม่พบเหตุการณ์',provider_delivery_unknown:'ไม่ทราบผลส่ง โปรดตรวจสอบประวัติ',delivery_state_unavailable:'ไม่สามารถยืนยันผลบันทึกการส่งได้ โปรดตรวจสอบประวัติ',expired_before_send:'หมดช่วงเวลาเริ่มแจ้งเตือนก่อนส่ง',provider_unavailable:'ผู้ให้บริการไม่พร้อมใช้งาน',provider_rejected:'ผู้ให้บริการปฏิเสธคำขอ' });
 Object.assign(messages,{fcm_not_configured:'ระบบส่งแจ้งเตือนยังไม่พร้อม',database_unavailable:'ระบบข้อมูลไม่พร้อมชั่วคราว',delivery_unknown_or_in_progress:'ยังไม่ทราบผลหรือคำขอกำลังดำเนินการ โปรดตรวจประวัติ',json_required:'ต้องใช้ข้อมูล JSON',body_too_large:'คำขอมีขนาดเกินกำหนด',request_interrupted:'คำขอถูกขัดจังหวะ',invalid_from:'วันเริ่มไม่ถูกต้อง',invalid_to:'วันสิ้นสุดไม่ถูกต้อง',invalid_range:'ช่วงเวลาไม่ถูกต้อง',invalid_status:'สถานะไม่ถูกต้อง',invalid_limit:'จำนวนรายการไม่ถูกต้อง',invalid_cursor:'ตำแหน่งหน้าถัดไปไม่ถูกต้อง'});
 messages.provider_authentication_failed='ระบบผู้ให้บริการไม่สามารถยืนยันตัวตนได้';
+Object.assign(messages, {no_devices_registered:'ยังไม่มีอุปกรณ์ลงทะเบียนรับแจ้งเตือน',partial_provider_outcome:'ผลส่งแต่ละเครื่องไม่ครบหรือแตกต่างกัน โปรดตรวจรายละเอียดรายเครื่อง',device_not_found:'ไม่พบอุปกรณ์'});
 export function failure(code: string, status: number) { return NextResponse.json({ error: messages[code] ?? messages.upstream_error, code }, { status, headers: {'Cache-Control':'no-store'} }); }
 export const invalidQuery = () => failure('invalid_schema',400);
 export const invalidOrigin = () => failure('invalid_origin',403);
@@ -67,6 +68,23 @@ export async function upstream(request: Request,path: '/v1/dashboard/history'|'/
     const data=path.endsWith('/history')?parseHistory(result.data):path.endsWith('/stats')?parseStats(result.data):body!==undefined?projectReceipt(result.data,body):parseDetail(result.data,decodeURIComponent(path.split('/').at(-1)!));
     return NextResponse.json(data,{status:result.status,headers:{'Cache-Control':'no-store'}});
   } catch(e){return failure(e instanceof Error && e.message==='server_configuration'?'server_configuration':'upstream_error',e instanceof Error && e.message==='server_configuration'?503:502);}
+}
+export async function devicesRoute(request: Request, id?: string) {
+  const deleting = request.method === 'DELETE';
+  const rejected = guard(request, deleting); if (rejected) return rejected;
+  if (request.method !== 'GET' && !deleting || deleting !== (id !== undefined) || id !== undefined && !validDeviceId(id) || new URL(request.url).search) return invalidQuery();
+  try {
+    const token = sessionToken(request.headers.get('cookie'));
+    if (!token) return cookie(failure('session_required',401));
+    const result = await callBackend(id === undefined ? '/v1/dashboard/devices' : `/v1/dashboard/devices/${id}`, token, undefined, undefined, deleting ? 'DELETE' : 'GET');
+    if (result.status !== 200) return backendError(result);
+    let data: unknown;
+    if (deleting) {
+      if (!result.data || (result.data as {revoked?: unknown}).revoked !== true) throw Error('upstream_error');
+      data = {revoked: true};
+    } else data = parseDevices(result.data);
+    return NextResponse.json(data,{headers:{'Cache-Control':'no-store'}});
+  } catch(e) {return failure(e instanceof Error && e.message==='server_configuration'?'server_configuration':'upstream_error',e instanceof Error && e.message==='server_configuration'?503:502);}
 }
 function projectReceipt(raw:unknown, expected:unknown) {
   const v=raw as Record<string,unknown>;

@@ -19,7 +19,7 @@ const evidence = join(repo, 'artifacts', 'dashboard-auth-check', runID);
 mkdirSync(evidence, { recursive: true });
 const report = { run_id: runID, started_at: new Date().toISOString(), passed: false, synthetic_only: true, real_fcm: false, cases: [], screenshots: [], cleanup: false };
 const cleanEnv = { ...process.env };
-for (const name of ['DATABASE_URL','TEST_DB_URL','GOOGLE_APPLICATION_CREDENTIALS','FCM_DEVICE_TOKEN','ALERT_API_KEY','BACKEND_API_KEY_FILE','BACKEND_API_KEY','DASHBOARD_BOOTSTRAP_PASSWORD','NODE_OPTIONS']) delete cleanEnv[name];
+for (const name of ['DATABASE_URL','TEST_DB_URL','GOOGLE_APPLICATION_CREDENTIALS','FCM_DEVICE_TOKEN','ALERT_API_KEY','DEVICE_TOKEN_ENCRYPTION_KEY','BACKEND_API_KEY_FILE','BACKEND_API_KEY','DASHBOARD_BOOTSTRAP_PASSWORD','NODE_OPTIONS']) delete cleanEnv[name];
 let fixture, web, browser, manifest, cdp, browserCDP;
 const children = [];
 function owned(exe, args, options = {}) {
@@ -49,13 +49,17 @@ async function control(path, body = {}) {
   return localRequest(`${manifest.api_url}/__fixture/${path}`, { body, headers: { 'X-Fixture-Control': manifest.control } });
 }
 async function pageRequest(path, { token, method, body, headers } = {}) {
-  return localRequest(new URL(path, manifest.web_url), { method, body, headers: { ...(token ? { Cookie:`__Host-notify_session=${token}` } : {}), ...(body || method === 'POST' ? { Origin:manifest.web_url, 'Content-Type':'application/json','X-Notify-Request':'dashboard' } : {}), ...headers } });
+  return localRequest(new URL(path, manifest.web_url), { method, body, headers: { ...(token ? { Cookie:`__Host-notify_session=${token}` } : {}), ...(body || method && method !== 'GET' ? { Origin:manifest.web_url, 'Content-Type':'application/json','X-Notify-Request':'dashboard' } : {}), ...headers } });
 }
 const check = name => report.cases.push(name);
 const statsPath = '/api/stats?from=2020-01-01T00%3A00%3A00Z&to=2030-01-01T00%3A00%3A00Z';
 async function navigate(path) {
   await cdp.send('Page.navigate', { url: new URL(path, manifest.web_url).href });
   await waitFor(async () => (await cdp.evaluate('location.origin')) === manifest.web_url && await cdp.evaluate('document.readyState === "complete"'), `navigation ${path}`);
+}
+async function resize(metrics) {
+  await cdp.send('Emulation.setDeviceMetricsOverride',metrics);
+  await cdp.evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
 }
 async function screenshot(name, expectedText) {
   const path = join(evidence, `${name}.png`);
@@ -66,6 +70,7 @@ async function screenshot(name, expectedText) {
   report.screenshots.push(`${name}.png`);
 }
 async function checkLayout(width, label, expectedText = 'ประวัติ') {
+  await cdp.evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
   const metrics = await cdp.evaluate(`(() => {
     const width=${width};
     const boxes=Array.from(document.querySelectorAll('.console,.site-header,.header-inner,.workspace,.account-controls,.shell,.filter-panel,.summary-grid,.history-section,.table-wrap,.composer-grid,.auth-card')).map(el=>{
@@ -95,9 +100,11 @@ async function chooseTheme(value) {
   const labels={dark:'มืด',light:'สว่าง',system:'ตามระบบ'};
   await cdp.click('document.querySelector(".theme-control.ant-select,.theme-control .ant-select")');
   await textWait('Boolean(document.querySelector(".ant-select-dropdown:not(.ant-select-dropdown-hidden)"))','Ant theme dropdown opened');
+  await textWait(`(() => { const menu=document.querySelector('.ant-select-dropdown:not(.ant-select-dropdown-hidden)'); return !!menu && !menu.className.includes('prepare') && !menu.getAnimations({subtree:true}).some(a=>a.playState==='running'); })()`, 'Ant theme popup entrance animation finished before native click');
   await cdp.click(`Array.from(document.querySelectorAll('.ant-select-dropdown:not(.ant-select-dropdown-hidden) .ant-select-item-option')).find(el=>el.getAttribute('title')===${JSON.stringify(labels[value])})`);
   await textWait(`document.documentElement.dataset.theme === ${JSON.stringify(value)}`, `theme ${value}`);
   await textWait(`document.querySelector('.theme-control.ant-select,.theme-control .ant-select').textContent.includes(${JSON.stringify(labels[value])})`, 'closed Ant select displays the selected label');
+  await textWait(`!Array.from(document.querySelectorAll('.ant-select-dropdown')).some(el=>{const style=getComputedStyle(el);return style.display!=='none' && style.visibility!=='hidden' && el.getClientRects().length>0;})`, 'Ant theme popup fully closed before viewport/layout checks');
   await textWait('!document.getAnimations().some(a => a instanceof CSSTransition && a.playState === "running")', 'theme transitions settled');
   await textWait(`getComputedStyle(document.documentElement).colorScheme === (${JSON.stringify(value)}==='system'?(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'):${JSON.stringify(value)})`, 'resolved Ant theme algorithm');
 }
@@ -136,7 +143,7 @@ async function checkMinimalShell() {
     const nav=document.querySelector('nav[aria-label="เมนูหลัก"]');
     return {sidebar:!!document.querySelector('.sidebar'),header:!!nav?.closest('header'),links:nav?.querySelectorAll('a').length,decorative_tagline:document.body.innerText.includes('OPERATIONS CONSOLE')};
   })()`);
-  assert.deepEqual(shell, { sidebar:false, header:true, links:2, decorative_tagline:false }, 'Minimal header replaces the sidebar without losing navigation');
+  assert.deepEqual(shell, { sidebar:false, header:true, links:3, decorative_tagline:false }, 'Header keeps history, test and device navigation without a sidebar');
   report.minimal_shell = shell;
 }
 async function checkCompactMobileHeader() {
@@ -201,7 +208,7 @@ function removeOwnedRoot() {
 }
 
 try {
-  const sources = ['app/globals.css','app/console-shell.tsx','app/auth-form.tsx','app/dashboard.tsx','app/test/test-composer.tsx','app/layout.tsx','app/error.tsx','app/ant-provider.tsx','lib/ant-theme.ts','package.json','pnpm-lock.yaml'].map(name => join(repo,'dashboard',name));
+  const sources = ['app/globals.css','app/console-shell.tsx','app/auth-form.tsx','app/dashboard.tsx','app/test/test-composer.tsx','app/layout.tsx','app/error.tsx','app/ant-provider.tsx','app/devices/page.tsx','app/devices/devices.tsx','app/api/devices/route.ts','app/api/devices/[id]/route.ts','lib/ant-theme.ts','lib/protocol.ts','lib/backend.ts','lib/security.ts','lib/client.ts','package.json','pnpm-lock.yaml'].map(name => join(repo,'dashboard',name));
   const buildFile = join(repo,'dashboard','.next','BUILD_ID');
   assert.ok(statSync(buildFile).mtimeMs >= Math.max(...sources.map(file => statSync(file).mtimeMs)), 'Build must be newer than all changed UI sources');
   report.source = { commit:execFileSync('git',['rev-parse','HEAD'],{cwd:repo,encoding:'utf8'}).trim(), ui_sha256:createHash('sha256').update(sources.map(file => readFileSync(file)).reduce((a,b)=>Buffer.concat([a,b]),Buffer.alloc(0))).digest('hex'), build_id:readFileSync(buildFile,'utf8').trim() };
@@ -279,7 +286,7 @@ try {
   await screenshot('critical-confirmation','TTL ไม่ใช่เวลาหยุดเสียง');
   await cdp.send('Emulation.setDeviceMetricsOverride',{width:360,height:844,deviceScaleFactor:1,mobile:true});await checkDialogViewport('critical-mobile-360');await screenshot('critical-confirmation-mobile-360','ยืนยันส่งแบบวิกฤต?');
   await cdp.key('Escape','Escape',27);await textWait('!document.querySelector("[role=dialog][aria-modal=true]")','cancel critical confirmation');assert.equal((await control('inspect')).data.send_calls,1);
-  await cdp.send('Emulation.setDeviceMetricsOverride',{width:1440,height:900,deviceScaleFactor:1,mobile:false});
+  await resize({width:1440,height:900,deviceScaleFactor:1,mobile:false});
   await cdp.click('document.querySelector("form button[type=submit]")');await textWait('Boolean(document.querySelector("[role=dialog][aria-modal=true]"))','critical confirmation again');
   await cdp.click('Array.from(document.querySelector("[role=dialog][aria-modal=true]").querySelectorAll("button")).find(e=>e.textContent.includes("ยืนยัน"))');
   await waitFor(async()=> (await control('inspect')).data.send_calls===2,'synthetic critical accepted');
@@ -317,6 +324,70 @@ try {
   await waitFor(async()=> (await control('inspect')).data.cursor_calls===2,'pagination retry actually performs another request');
   await textWait('document.body.innerText.includes("โหลดแล้ว 28 รายการ")','pagination retry appends actual remaining rows');
   await screenshot('pagination-retry-recovered','โหลดแล้ว 28 รายการ');check('cursor-page transport error can be retried without duplicate rows or changed filters');
+  // Same account, distinct installations; every token is synthetic and the
+  // fixture Sender cannot contact FCM. Never serialize client tokens/caps into report.
+  const native = (path,body,token) => localRequest(manifest.api_url+path,{body,headers:token?{Authorization:`Bearer ${token}`}:{}});
+  const phoneTokens = ['SYNTHETIC_FCM_ORIGINAL_PIXEL_001','SYNTHETIC_FCM_TWO_'+randomUUID()];
+  const installations = [randomUUID(),randomUUID()];
+  const names = ['เครื่องจำลองหนึ่ง ไม่มี FCM จริง','เครื่องจำลองสอง ไม่มี FCM จริง'];
+  const phones=[];
+  for(let i=0;i<2;i++) {
+    const login=await native('/v1/client/login',{username:'admin',password:nextPassword,installation_id:installations[i]});
+    assert.equal(login.status,200,'native login succeeds with the same shared account');
+    assert.equal(login.data.user.must_change_password,false);assert.equal(login.data.access_token.length,43);
+    const token=login.data.access_token;
+    const keys=await native('/v1/client/keys',undefined,token);assert.equal(keys.status,200);assert.ok(keys.data.items.some(item=>item.key_id==='primary'));
+    const registration=await native('/v1/client/devices/register',{key_id:'primary',device_name:names[i],fcm_token:phoneTokens[i]},token);
+    assert.equal(registration.status,200,'native registration');assert.equal(registration.data.installation_id,installations[i]);
+    phones.push({token,id:registration.data.device_id});
+  }
+  const list=await pageRequest('/api/devices',{token:full});assert.equal(list.status,200);assert.equal(list.data.items.filter(item=>item.active).length,2);
+  assert.ok(!JSON.stringify(list.data).includes('SYNTHETIC_FCM'),'BFF strips registration tokens');
+  assert.equal((await pageRequest('/api/devices')).status,401);
+  assert.equal((await pageRequest(`/api/devices/${phones[1].id}`,{token:full,method:'DELETE',headers:{Origin:'https://attacker.invalid'}})).status,403);
+  const sendsBefore=(await control('inspect')).data.send_calls;
+  const sharedBodies=[0,1].map(i=>({alert_id:randomUUID(),title:`หลายเครื่องจำลอง ${i+1} ไม่มี FCM จริง`,message:'ข้อมูลสังเคราะห์ทดสอบสองเครื่อง ไม่ใช่การส่งถึงมือถือจริง',importance:'critical',ttl_seconds:300}));
+  const sharedKeys=[randomUUID(),randomUUID()];
+  const sendShared=(i)=>pageRequest('/api/test-alerts',{token:full,body:sharedBodies[i],headers:{'Idempotency-Key':sharedKeys[i]}});
+  for(let i=0;i<2;i++){assert.equal((await sendShared(i)).status,202);assert.equal((await control('inspect')).data.target_counts[sharedBodies[i].alert_id],2);}
+  assert.equal((await control('inspect')).data.send_calls,sendsBefore+4,'one request fans out once per installation');
+  const sharedAction=randomUUID();
+  const ackPhone=(alert,phone)=>control('ack',{alert_id:sharedBodies[alert].alert_id,client_action_id:sharedAction,client_acked_at:new Date().toISOString(),target_token:phoneTokens[phone]});
+  assert.equal((await ackPhone(0,0)).status,200);assert.equal((await ackPhone(0,0)).status,200,'retry same phone/action');
+  let sharedDetail=await pageRequest(`/api/alerts/${sharedBodies[0].alert_id}`,{token:full});assert.equal(sharedDetail.status,200);
+  assert.equal(sharedDetail.data.deliveries.length,2);assert.equal(sharedDetail.data.deliveries.filter(item=>item.acknowledged_at!==null).length,1,'phone one Ack must not Ack phone two');
+  assert.equal(sharedDetail.data.ack_count,1);
+  await navigate('/devices');await textWait(`document.body.innerText.includes(${JSON.stringify(names[1])})`,'registered device list rendered');await checkLayout(1440,'devices-desktop','อุปกรณ์');await screenshot('shared-devices-dark-desktop',names[0]);
+  await chooseTheme('light');await screenshot('shared-devices-light-desktop',names[1]);await chooseTheme('dark');
+  await cdp.send('Emulation.setDeviceMetricsOverride',{width:360,height:844,deviceScaleFactor:1,mobile:true});await checkLayout(360,'devices-mobile-360','อุปกรณ์');await screenshot('shared-devices-mobile-360',names[0]);await checkTableKeyboard();
+  await cdp.send('Emulation.setDeviceMetricsOverride',{width:1440,height:900,deviceScaleFactor:1,mobile:false});
+  await navigate('/');await textWait(`document.body.innerText.includes(${JSON.stringify(sharedBodies[0].title)})`,'shared alert history');
+  await cdp.click(`Array.from(document.querySelectorAll('.history-section tbody tr')).find(row=>row.textContent.includes(${JSON.stringify(sharedBodies[0].title)})).querySelector('button')`);
+  await textWait('Boolean(document.querySelector("[role=dialog] .detail-fields")) && document.querySelector("[role=dialog]").textContent.includes("ผลรายเครื่อง")','per-device detail modal');
+  await checkDialogViewport('shared-detail-desktop');await screenshot('shared-alert-one-ack',names[1]);await cdp.key('Escape','Escape',27);
+  // Ack-all is one human action reused across multiple alerts, scoped per phone.
+  // Both phones may independently choose the same UUID without suppressing one another.
+  assert.equal((await ackPhone(1,0)).status,200,'one phone Ack-all action must cover a second alert');
+  assert.equal((await ackPhone(0,1)).status,200);assert.equal((await ackPhone(1,1)).status,200);
+  for(let i=0;i<2;i++){const detail=await pageRequest(`/api/alerts/${sharedBodies[i].alert_id}`,{token:full});assert.equal(detail.data.ack_count,2);assert.equal(new Set(detail.data.ack_actions.map(action=>action.device_id)).size,2);}
+  check('same-account native enrollment, two-target fanout, isolated per-phone Ack and cross-alert Ack-all dedup');
+  await navigate('/devices');await textWait(`document.body.innerText.includes(${JSON.stringify(names[1])})`,'devices before revoke');
+  await cdp.click(`Array.from(document.querySelectorAll('tbody tr')).find(row=>row.textContent.includes(${JSON.stringify(names[1])})).querySelector('button')`);
+  await textWait('Boolean(document.querySelector("[role=dialog]"))','device revocation confirmation');
+  await textWait('document.activeElement?.textContent.trim()==="กลับ"','revocation Cancel focus');await cdp.key('Escape','Escape',27);
+  assert.equal((await pageRequest('/api/devices',{token:full})).data.items.filter(item=>item.active).length,2,'cancel must not revoke');
+  assert.equal((await pageRequest(`/api/devices/${phones[1].id}`,{token:full,method:'DELETE'})).status,200);
+  assert.equal((await native('/v1/client/session',undefined,phones[1].token)).status,401,'revoked client token rejected');
+  const rotatedToken='SYNTHETIC_ROTATED_'+randomUUID();
+  const rotated=await native('/v1/client/devices/register',{key_id:'primary',device_name:names[0],fcm_token:rotatedToken},phones[0].token);assert.equal(rotated.status,200);assert.equal(rotated.data.device_id,phones[0].id);
+  const replayBefore=(await control('inspect')).data.send_calls;assert.equal((await sendShared(0)).status,202);assert.equal((await control('inspect')).data.send_calls,replayBefore,'membership/token changes must not resend a replay');
+  const afterBody={...sharedBodies[0],alert_id:randomUUID(),title:'หลังยกเลิกเครื่องจำลอง ไม่ใช่ FCM จริง'};
+  assert.equal((await pageRequest('/api/test-alerts',{token:full,body:afterBody,headers:{'Idempotency-Key':randomUUID()}})).status,202);
+  assert.equal((await control('inspect')).data.target_counts[afterBody.alert_id],1,'only active registration receives the new alert');
+  assert.equal((await native('/v1/client/logout',{},phones[0].token)).status,200);
+  assert.equal((await native('/v1/client/session',undefined,phones[0].token)).status,401);
+  check('token rotation, revoke cancellation/confirmation, client logout and immutable idempotent target snapshots');
+  await navigate('/');await textWait('document.body.innerText.includes("ประวัติ")','history before dashboard logout');
   await clickButton('ออกจากระบบ');await textWait('location.pathname === "/login"','logout navigation');assert.equal((await pageRequest(statsPath,{token:full})).status,401);assert.equal((await pageRequest(statsPath)).status,401);
   await cdp.fill('input[name=username]','admin');await cdp.fill('input[name=password]',manifest.bootstrap_password);await cdp.click('document.querySelector("form button[type=submit]")');await textWait('document.body.innerText.includes("ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง")','bootstrap credential no longer logs in');
   await cdp.fill('input[name=password]',nextPassword);await cdp.click('document.querySelector("form button[type=submit]")');await textWait('location.pathname === "/"','new password works after logout');
@@ -324,6 +395,12 @@ try {
   report.runtime_errors=cdp.errors;assert.deepEqual(cdp.errors,[],'No unhandled browser runtime/console errors');report.passed=true;
 } catch (error) {
   report.error = error instanceof Error ? error.message : 'Browser regression failed';
+  if(cdp) {
+    try {
+      report.failure_state=await cdp.evaluate(`({path:location.pathname,width:innerWidth,focus:document.activeElement?.tagName,dialogs:document.querySelectorAll('[role=dialog]').length,forms:Array.from(document.forms).map(form=>({valid:form.checkValidity(),fields:Array.from(form.elements).filter(el=>el.name).map(el=>({name:el.name,type:el.type,valid:el.validity?.valid,checked:el.type==='radio'?el.checked:undefined})),buttons:Array.from(form.querySelectorAll('button')).map(el=>({text:el.textContent,disabled:el.disabled,rect:JSON.stringify(el.getBoundingClientRect())}))}))})`);
+      await screenshot('failure-state','');
+    } catch { /* Never replace the original failure with diagnostic acquisition failure. */ }
+  }
   process.exitCode=1;
 } finally {
   try {

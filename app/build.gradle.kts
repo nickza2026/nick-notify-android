@@ -10,8 +10,8 @@ android {
         applicationId = "dev.notifyalarm"
         minSdk = 26
         targetSdk = 35
-        versionCode = 6
-        versionName = "0.6.0-safety-poc"
+        versionCode = 7
+        versionName = "0.7.0-device-login"
         testInstrumentationRunner = "dev.notifyalarm.AlarmInstrumentation"
     }
     signingConfigs {
@@ -54,7 +54,8 @@ dependencies {
 // competing with the Android emulator and the user's other applications.
 tasks.withType<Test>().configureEach {
     minHeapSize = "32m"
-    maxHeapSize = "128m"
+    // Robolectric JSON contract tests load Android resources; 128 MiB can OOM in AssetManager.
+    maxHeapSize = "384m"
     maxParallelForks = 1
 }
 

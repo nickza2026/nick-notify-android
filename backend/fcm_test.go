@@ -106,6 +106,28 @@ func TestPureFCMNormalTransport(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+func TestPureFCMTargetedAndExactUnregistered(t *testing.T) {
+	sender := fakeFCM(func(r *http.Request) (*http.Response, error) {
+		var body struct {
+			Message struct {
+				Token string `json:"token"`
+			} `json:"message"`
+		}
+		if e := json.NewDecoder(r.Body).Decode(&body); e != nil || body.Message.Token != "registered_token" {
+			t.Fatal("incorrect targeted FCM token")
+		}
+		return &http.Response{StatusCode: 404, Body: io.NopCloser(strings.NewReader(`{"error":{"details":[{"@type":"type.googleapis.com/google.firebase.fcm.v1.FcmError","errorCode":"UNREGISTERED"}]}}`))}, nil
+	})
+	err := sender.SendTo(context.Background(), "registered_token", testFCMData(time.Now().Add(time.Minute)), 60)
+	var se *SendError
+	if !errors.As(err, &se) || se.Code != "provider_unregistered" || se.Ambiguous {
+		t.Fatal(err)
+	}
+	sender.token = ""
+	if sender.HasLegacyTarget() {
+		t.Fatal("missing static fallback exposed as legacy target")
+	}
+}
 func TestPureDecodeRejectsNullAndWrongMediaType(t *testing.T) {
 	for _, body := range []string{`null`, `[]`, `{"ttl_seconds":null}`, `{"alert_id":null}`, `{"client_action_id":null}`} {
 		r := httptest.NewRequest("POST", "/", strings.NewReader(body))

@@ -5,6 +5,8 @@ import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
 import java.time.Instant
 import dev.notifyalarm.sync.AckSync
+import dev.notifyalarm.sync.ClientRegistration
+import dev.notifyalarm.sync.ClientAccount
 
 /**
  * Compile-ready FCM data receiver. It is NOT configured until the app has real Firebase options
@@ -68,8 +70,15 @@ class AlertMessagingService : FirebaseMessagingService() {
 
     override fun onNewToken(token: String) {
         // Private app storage only; never log or put a registration token in a notification.
-        getSharedPreferences(PUSH_PREFERENCES, Context.MODE_PRIVATE).edit()
-            .putString(TOKEN_KEY, token).putBoolean("needs_registration", true).apply()
+        val changed = synchronized(ClientAccount.lock) {
+            val prefs = getSharedPreferences(PUSH_PREFERENCES, Context.MODE_PRIVATE)
+            val changed = prefs.getString(TOKEN_KEY, null) != token
+            prefs.edit()
+                .putString(TOKEN_KEY, token)
+                .putBoolean("needs_registration", changed || prefs.getBoolean("needs_registration", true)).commit()
+            changed
+        }
+        ClientRegistration.enqueue(this, tokenChanged = changed)
     }
 
     companion object {

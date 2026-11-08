@@ -39,9 +39,30 @@ export interface AckAction {
   client_action_id: string;
   client_acked_at: string | null;
   received_at: string;
+  device_id?: string | null;
+  device_name?: string | null;
 }
 
-export interface AlertDetail extends AlertSummary { ack_actions: AckAction[] }
+export interface AlertDelivery {
+  device_id: string;
+  device_name: string;
+  status: string;
+  provider_accepted_at: string | null;
+  acknowledged_at: string | null;
+  ack_count: number | null;
+  last_ack_at: string | null;
+}
+export interface RegisteredDevice {
+  device_id: string;
+  installation_id: string;
+  device_name: string;
+  key_ids: string[];
+  active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+export interface DevicesResponse { items: RegisteredDevice[] }
+export interface AlertDetail extends AlertSummary { ack_actions: AckAction[]; deliveries?: AlertDelivery[] }
 export interface HistoryResponse { items: AlertSummary[]; next_cursor: string | null }
 export interface StatsResponse {
   total_alerts: number | null;
@@ -145,6 +166,42 @@ function metric(value: unknown): number | null {
   if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) throw Error('invalid_response');
   return value;
 }
+export function validDeviceId(value: string): boolean {
+  return /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(value);
+}
+function deviceId(value: unknown): string {
+  const id = text(value, 36);
+  if (!validDeviceId(id)) throw Error('invalid_response');
+  return id;
+}
+function deviceName(value: unknown): string {
+  const name = text(value, 160);
+  if (!name.trim() || [...name].length > 80) throw Error('invalid_response');
+  return name;
+}
+export function parseDevices(value: unknown): DevicesResponse {
+  const data = record(value);
+  if (!Array.isArray(data.items) || data.items.length > 1000) throw Error('invalid_response');
+  const seen = new Set<string>();
+  return { items: data.items.map((value) => {
+    const item = record(value);
+    const id = deviceId(item.device_id);
+    if (seen.has(id) || typeof item.active !== 'boolean' || !Array.isArray(item.key_ids) || item.key_ids.length > 100) throw Error('invalid_response');
+    seen.add(id);
+    const keys = item.key_ids.map((value) => {
+      const key = text(value, 100);
+      if (!/^[A-Za-z0-9_-]+$/.test(key)) throw Error('invalid_response');
+      return key;
+    });
+    const created = timestamp(item.created_at), updated = timestamp(item.updated_at);
+    if (!created || !updated || new Set(keys).size !== keys.length) throw Error('invalid_response');
+    return { device_id: id, installation_id: deviceId(item.installation_id), device_name: deviceName(item.device_name), key_ids: keys,
+      active: item.active, created_at: created, updated_at: updated };
+  }) };
+}
+export function acknowledgementIdentity(action: Pick<AckAction, 'device_id' | 'client_action_id'>): string {
+  return `${action.device_id ?? 'legacy'}:${action.client_action_id}`;
+}
 export function parseSummary(value: unknown): AlertSummary {
   const item = record(value);
   const id = text(item.alert_id, 100);
@@ -176,12 +233,29 @@ export function parseDetail(value: unknown, requestedId: string): AlertDetail {
   const data = record(value);
   const summary = parseSummary(data);
   if (summary.alert_id !== requestedId || !Array.isArray(data.ack_actions) || data.ack_actions.length > 4000) throw Error('invalid_response');
-  return { ...summary, ack_actions: data.ack_actions.map((value) => {
+  let deliveries: AlertDelivery[] | undefined;
+  if (data.deliveries !== undefined) {
+    if (!Array.isArray(data.deliveries) || data.deliveries.length > 1000) throw Error('invalid_response');
+    const seen = new Set<string>();
+    deliveries = data.deliveries.map((value) => {
+      const delivery = record(value);
+      const id = deviceId(delivery.device_id);
+      if (seen.has(id)) throw Error('invalid_response');
+      seen.add(id);
+      return { device_id: id, device_name: deviceName(delivery.device_name), status: text(delivery.status, 80),
+        provider_accepted_at: timestamp(delivery.provider_accepted_at), acknowledged_at: timestamp(delivery.acknowledged_at),
+        ack_count: metric(delivery.ack_count), last_ack_at: timestamp(delivery.last_ack_at) };
+    });
+  }
+  return { ...summary, ...(deliveries === undefined ? {} : { deliveries }), ack_actions: data.ack_actions.map((value) => {
     const action = record(value);
     const id = text(action.client_action_id, 36);
     if (!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(id)) throw Error('invalid_response');
     const received = timestamp(action.received_at);
     if (!received) throw Error('invalid_response');
-    return { client_action_id: id, client_acked_at: timestamp(action.client_acked_at), received_at: received };
+    const device = action.device_id === undefined ? undefined : action.device_id === null ? null : deviceId(action.device_id);
+    const name = action.device_name === undefined ? undefined : action.device_name === null ? null : deviceName(action.device_name);
+    return { client_action_id: id, client_acked_at: timestamp(action.client_acked_at), received_at: received,
+      ...(device === undefined ? {} : { device_id: device }), ...(name === undefined ? {} : { device_name: name }) };
   }) };
 }

@@ -37,6 +37,7 @@ func (e *SendError) Error() string { return e.Code }
 type API struct {
 	DB                                  *sql.DB
 	Key                                 string
+	DeviceTokenKey                      []byte
 	Sender                              Sender
 	AckBase                             string
 	Now                                 func() time.Time
@@ -168,6 +169,17 @@ func (a *API) capAuthorized(ctx context.Context, id string, r *http.Request) (bo
 	}
 	return subtle.ConstantTimeCompare(digest(t), stored) == 1, nil
 }
+func (a *API) deviceCapAuthorized(ctx context.Context, id string, r *http.Request) (bool, error) {
+	t := bearer(r)
+	if !dashboardToken.MatchString(t) {
+		return false, nil
+	}
+	var exists bool
+	if e := a.DB.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM device_deliveries WHERE alert_id=$1 AND capability_hash=$2)`, id, digest(t)).Scan(&exists); e != nil {
+		return false, fail(503, "ack_state_unavailable")
+	}
+	return exists, nil
+}
 func decode(r *http.Request, v any) error {
 	media, _, mediaErr := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if mediaErr != nil || strings.ToLower(media) != "application/json" {
@@ -269,6 +281,10 @@ func (a *API) serve(w http.ResponseWriter, r *http.Request) {
 		a.serveDashboard(w, r)
 		return
 	}
+	if strings.HasPrefix(path, "/v1/client/") || path == "/v1/client" {
+		a.serveClient(w, r)
+		return
+	}
 	parts := strings.Split(strings.TrimPrefix(path, "/v1/alerts/"), "/")
 	id := ""
 	ack := false
@@ -285,6 +301,13 @@ func (a *API) serve(w http.ResponseWriter, r *http.Request) {
 			if authErr != nil {
 				failure(w, authErr)
 				return
+			}
+			if !ok {
+				ok, authErr = a.deviceCapAuthorized(r.Context(), id, r)
+				if authErr != nil {
+					failure(w, authErr)
+					return
+				}
 			}
 		}
 	} else {
@@ -325,9 +348,6 @@ func (a *API) serve(w http.ResponseWriter, r *http.Request) {
 	}
 }
 func (a *API) create(w http.ResponseWriter, r *http.Request) error {
-	if a.Sender == nil {
-		return fail(503, "fcm_not_configured")
-	}
 	key := r.Header.Get("Idempotency-Key")
 	if !regexp.MustCompile(`^[A-Za-z0-9_.:-]{1,128}$`).MatchString(key) {
 		return fail(400, "idempotency_key_required")
@@ -417,6 +437,33 @@ func (a *API) create(w http.ResponseWriter, r *http.Request) error {
 		sendResult(w, oldID, outcome, oldExpires.UTC(), code.String, oldImportance)
 		return nil
 	}
+	if a.Sender == nil {
+		return fail(503, "fcm_not_configured")
+	}
+	targets, managed, e := a.reserveTargets(r.Context(), tx, id)
+	if e != nil {
+		var ae apiError
+		if errors.As(e, &ae) {
+			return e
+		}
+		return fail(503, "database_unavailable")
+	}
+	if len(targets) > 0 {
+		if a.AckBase == "" {
+			return fail(503, "ack_not_configured")
+		}
+		if _, ok := a.Sender.(TargetSender); !ok {
+			return fail(503, "targeted_sender_not_configured")
+		}
+	}
+	if managed && len(targets) == 0 {
+		return fail(503, "no_devices_registered")
+	}
+	if len(targets) == 0 && !managed {
+		if s, ok := a.Sender.(legacyTarget); ok && !s.HasLegacyTarget() {
+			return fail(503, "no_devices_registered")
+		}
+	}
 	// Only new sends use this newly generated payload. A replay must return its
 	// persisted receipt even if timestamp formatting or ACK URL length changed.
 	// An oversized new reservation is rolled back; no provider I/O can occur.
@@ -424,8 +471,25 @@ func (a *API) create(w http.ResponseWriter, r *http.Request) error {
 	if len(encoded) > payloadLimit {
 		return fail(422, "payload_too_large")
 	}
+	if len(targets) > 0 {
+		for _, t := range targets {
+			data["ack_token"] = t.cap
+			encoded, _ = json.Marshal(data)
+			if len(encoded) > payloadLimit {
+				return fail(422, "payload_too_large")
+			}
+		}
+	}
 	if e = tx.Commit(); e != nil {
 		return fail(503, "database_unavailable")
+	}
+	if len(targets) > 0 {
+		outcome, code, _, sendErr := a.sendTargets(id, expires, data, targets)
+		if sendErr != nil {
+			return fail(503, "delivery_state_unavailable")
+		}
+		sendResult(w, id, outcome, expires, code, importance)
+		return nil
 	}
 	// Reservation and hashed capability are committed before any network call. Unfinished sends remain unknown across restarts.
 	remaining := int(expires.Sub(a.now()).Seconds())
@@ -483,12 +547,17 @@ func (a *API) get(w http.ResponseWriter, r *http.Request, id string) error {
 	if e != nil {
 		return fail(503, "database_unavailable")
 	}
+	deliveries, e := a.deliveryDetails(r.Context(), id)
+	if e != nil {
+		return fail(503, "database_unavailable")
+	}
 	respond(w, 200, struct {
 		Alert
-		Acknowledged     bool     `json:"acknowledged"`
-		AckActions       []Action `json:"ack_actions"`
-		DeliveryVerified bool     `json:"delivery_verified"`
-	}{v, v.AckCount > 0, acts, false})
+		Acknowledged     bool             `json:"acknowledged"`
+		AckActions       []Action         `json:"ack_actions"`
+		Deliveries       []deliveryDetail `json:"deliveries"`
+		DeliveryVerified bool             `json:"delivery_verified"`
+	}{v, v.AckCount > 0, acts, deliveries, false})
 	return nil
 }
 
@@ -527,8 +596,21 @@ func (a *API) ack(w http.ResponseWriter, r *http.Request, id string) error {
 	if e = tx.QueryRowContext(r.Context(), `SELECT id FROM alerts WHERE id=$1 FOR UPDATE`, id).Scan(&locked); e != nil {
 		return fail(503, "ack_state_unavailable")
 	}
+	var deviceID string
+	deviceErr := tx.QueryRowContext(r.Context(), `SELECT device_id::text FROM device_deliveries WHERE alert_id=$1 AND capability_hash=$2`, id, digest(bearer(r))).Scan(&deviceID)
+	if deviceErr != nil && deviceErr != sql.ErrNoRows {
+		return fail(503, "ack_state_unavailable")
+	}
 	received := a.now()
-	res, e := tx.ExecContext(r.Context(), `INSERT INTO ack_actions(alert_id,client_action_id,client_acked_at,received_at) VALUES($1,$2,$3,$4) ON CONFLICT (alert_id,client_action_id) DO NOTHING`, id, action, client, received)
+	var res sql.Result
+	if deviceErr == nil {
+		if v.ClientActionID == nil {
+			action = uuid.NewSHA1(uuid.NameSpaceOID, []byte("notifyalarm:device:legacy:"+id+":"+deviceID)).String()
+		}
+		res, e = tx.ExecContext(r.Context(), `INSERT INTO device_ack_actions(alert_id,device_id,client_action_id,client_acked_at,received_at) VALUES($1,$2,$3,$4,$5) ON CONFLICT (alert_id,device_id,client_action_id) DO NOTHING`, id, deviceID, action, client, received)
+	} else {
+		res, e = tx.ExecContext(r.Context(), `INSERT INTO ack_actions(alert_id,client_action_id,client_acked_at,received_at) VALUES($1,$2,$3,$4) ON CONFLICT (alert_id,client_action_id) DO NOTHING`, id, action, client, received)
+	}
 	if e != nil {
 		return fail(503, "ack_state_unavailable")
 	}
@@ -537,6 +619,11 @@ func (a *API) ack(w http.ResponseWriter, r *http.Request, id string) error {
 		return fail(503, "ack_state_unavailable")
 	}
 	if inserted == 1 {
+		if deviceErr == nil {
+			if _, e = tx.ExecContext(r.Context(), `UPDATE device_deliveries SET first_ack_at=COALESCE(first_ack_at,$3) WHERE alert_id=$1 AND device_id=$2`, id, deviceID, received); e != nil {
+				return fail(503, "ack_state_unavailable")
+			}
+		}
 		if _, e = tx.ExecContext(r.Context(), `UPDATE alerts SET first_ack_at=COALESCE(first_ack_at,$2) WHERE id=$1`, id, received); e != nil {
 			return fail(503, "ack_state_unavailable")
 		}
@@ -550,6 +637,46 @@ func (a *API) ack(w http.ResponseWriter, r *http.Request, id string) error {
 	}
 	respond(w, 200, map[string]any{"alert_id": id, "status": "acknowledged", "acknowledged_at": vv.AcknowledgedAt, "ack_count": vv.AckCount, "last_ack_at": vv.LastAckAt})
 	return nil
+}
+
+type deliveryDetail struct {
+	DeviceID           string     `json:"device_id"`
+	DeviceName         string     `json:"device_name"`
+	Status             string     `json:"status"`
+	ProviderAcceptedAt *time.Time `json:"provider_accepted_at"`
+	AcknowledgedAt     *time.Time `json:"acknowledged_at"`
+	AckCount           int        `json:"ack_count"`
+	LastAckAt          *time.Time `json:"last_ack_at"`
+}
+
+func (a *API) deliveryDetails(ctx context.Context, id string) ([]deliveryDetail, error) {
+	rows, e := a.DB.QueryContext(ctx, `SELECT d.device_id::text,d.device_name,d.outcome,d.provider_accepted_at,d.first_ack_at,(SELECT count(*) FROM device_ack_actions x WHERE x.alert_id=d.alert_id AND x.device_id=d.device_id),(SELECT max(received_at) FROM device_ack_actions x WHERE x.alert_id=d.alert_id AND x.device_id=d.device_id) FROM device_deliveries d WHERE d.alert_id=$1 ORDER BY d.device_id`, id)
+	if e != nil {
+		return nil, e
+	}
+	defer rows.Close()
+	items := []deliveryDetail{}
+	for rows.Next() {
+		var v deliveryDetail
+		var accepted, ack, last sql.NullTime
+		if e = rows.Scan(&v.DeviceID, &v.DeviceName, &v.Status, &accepted, &ack, &v.AckCount, &last); e != nil {
+			return nil, e
+		}
+		if accepted.Valid {
+			t := accepted.Time.UTC()
+			v.ProviderAcceptedAt = &t
+		}
+		if ack.Valid {
+			t := ack.Time.UTC()
+			v.AcknowledgedAt = &t
+		}
+		if last.Valid {
+			t := last.Time.UTC()
+			v.LastAckAt = &t
+		}
+		items = append(items, v)
+	}
+	return items, rows.Err()
 }
 func dateParam(q url.Values, k string) (*time.Time, error) {
 	v := q.Get(k)
