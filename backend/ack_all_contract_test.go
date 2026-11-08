@@ -14,7 +14,9 @@ func TestDeviceAckAllActionAcrossAlerts(t *testing.T) {
 	db := testDB(t)
 	initial := "synthetic bootstrap password for Ack-all regression"
 	replacement := "synthetic replacement password for Ack-all regression"
-	if err := BootstrapDashboard(context.Background(), db, "admin", initial); err != nil { t.Fatal(err) }
+	if err := BootstrapDashboard(context.Background(), db, "admin", initial); err != nil {
+		t.Fatal(err)
+	}
 	sender := &targetStub{failures: map[string]error{}}
 	a := testAPI(t, db, sender)
 	access := ownerClient(t, a, uuid.NewString(), initial)
@@ -29,11 +31,17 @@ func TestDeviceAckAllActionAcrossAlerts(t *testing.T) {
 	for _, delivery := range sender.calls() {
 		for retry := 0; retry < 2; retry++ {
 			status, _, _ = call(t, a, "POST", "/v1/alerts/"+delivery.data["alert_id"]+"/ack", delivery.data["ack_token"], "", fmt.Sprintf(`{"client_action_id":%q}`, action))
-			if status != 200 { t.Fatalf("one Ack-all action must confirm every selected alert, got HTTP %d", status) }
+			if status != 200 {
+				t.Fatalf("one Ack-all action must confirm every selected alert, got HTTP %d", status)
+			}
 		}
 	}
 	status, result, _ := call(t, a, "GET", "/v1/stats", testKey, "", "")
 	mustStatus(t, status, 200)
-	if result["ack_action_count"] != float64(1) { t.Fatal("two alerts and retries must count as one human action on this phone") }
-	if result["acknowledged"] != float64(2) { t.Fatal("both selected alerts must have acknowledgement reports") }
+	if result["ack_action_count"] != float64(1) {
+		t.Fatal("two alerts and retries must count as one human action on this phone")
+	}
+	if result["acknowledged"] != float64(2) {
+		t.Fatal("both selected alerts must have acknowledgement reports")
+	}
 }
