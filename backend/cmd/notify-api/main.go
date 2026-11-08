@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"log"
 	"net"
@@ -45,13 +46,20 @@ func run() error {
 		return errors.New("dashboard bootstrap failed (check configuration; credentials not logged)")
 	}
 	var sender backend.Sender
-	if os.Getenv("GOOGLE_APPLICATION_CREDENTIALS") != "" && os.Getenv("FCM_DEVICE_TOKEN") != "" {
-		sender, e = backend.NewFCM(os.Getenv("GOOGLE_APPLICATION_CREDENTIALS"), os.Getenv("FCM_DEVICE_TOKEN"))
+	if os.Getenv("GOOGLE_APPLICATION_CREDENTIALS") != "" {
+		sender, e = backend.NewFCMProvider(os.Getenv("GOOGLE_APPLICATION_CREDENTIALS"), os.Getenv("FCM_DEVICE_TOKEN"))
 		if e != nil {
 			return errors.New("invalid FCM configuration")
 		}
 	}
-	api := &backend.API{DB: db, Key: os.Getenv("ALERT_API_KEY"), AckBase: os.Getenv("ACK_PUBLIC_BASE_URL"), Sender: sender}
+	var deviceTokenKey []byte
+	if encoded := os.Getenv("DEVICE_TOKEN_ENCRYPTION_KEY"); encoded != "" {
+		deviceTokenKey, e = base64.RawURLEncoding.Strict().DecodeString(encoded)
+		if e != nil || len(deviceTokenKey) != 32 {
+			return errors.New("invalid DEVICE_TOKEN_ENCRYPTION_KEY (base64url of 32 bytes required)")
+		}
+	}
+	api := &backend.API{DB: db, Key: os.Getenv("ALERT_API_KEY"), DeviceTokenKey: deviceTokenKey, AckBase: os.Getenv("ACK_PUBLIC_BASE_URL"), Sender: sender}
 	h, e := api.Handler()
 	if e != nil {
 		return errors.New("invalid API configuration")

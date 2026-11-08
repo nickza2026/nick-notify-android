@@ -28,7 +28,7 @@ export function authDTO(value: unknown) {
 }
 export function backendURL(path: string) {
   try {
-  if (!/^\/v1\/dashboard\/(?:login|session|change-password|logout|history|stats|alerts(?:\/[A-Za-z0-9_-]{1,100})?)$/.test(path)) throw Error('server_configuration');
+  if (!/^\/v1\/dashboard\/(?:login|session|change-password|logout|history|stats|alerts(?:\/[A-Za-z0-9_-]{1,100})?|devices(?:\/[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12})?)$/.test(path)) throw Error('server_configuration');
   const base = new URL(process.env.BACKEND_URL ?? 'http://127.0.0.1:8791');
   const allow = (process.env.BACKEND_ALLOWED_HTTP_ORIGINS ?? '').split(',').filter(Boolean).map(v => {
     const u = new URL(v.trim());

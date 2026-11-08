@@ -91,6 +91,9 @@ func BootstrapDashboard(ctx context.Context, db *sql.DB, username, password stri
 	if _, e = tx.ExecContext(ctx, `INSERT INTO dashboard_owner(id,username,password_hash,bootstrap_hash) VALUES(1,$1,$2,$2)`, username, hash); e != nil {
 		return e
 	}
+	if _, e = tx.ExecContext(ctx, `INSERT INTO client_keys(key_id,owner_id,name) VALUES('primary',1,$1) ON CONFLICT DO NOTHING`, primaryKeyName); e != nil {
+		return e
+	}
 	return tx.Commit()
 }
 
@@ -198,7 +201,10 @@ func (a *API) dashboard(w http.ResponseWriter, r *http.Request) error {
 	history := r.Method == "GET" && path == "/history"
 	stats := r.Method == "GET" && path == "/stats"
 	create := r.Method == "POST" && path == "/alerts"
-	if !login && !change && !logout && !session && !getAlert && !history && !stats && !create {
+	devices := r.Method == "GET" && path == "/devices"
+	revokeID := strings.TrimPrefix(path, "/devices/")
+	revoke := r.Method == "DELETE" && strings.HasPrefix(path, "/devices/") && canonicalUUID(revokeID)
+	if !login && !change && !logout && !session && !getAlert && !history && !stats && !create && !devices && !revoke {
 		return fail(404, "not_found")
 	}
 	var credentials struct {
@@ -344,6 +350,9 @@ func (a *API) dashboard(w http.ResponseWriter, r *http.Request) error {
 			if _, e = tx.ExecContext(r.Context(), `DELETE FROM dashboard_sessions`); e != nil {
 				return e
 			}
+			if _, e = tx.ExecContext(r.Context(), `DELETE FROM client_sessions`); e != nil {
+				return e
+			}
 			o.restricted = false
 		}
 		if _, e = tx.ExecContext(r.Context(), `UPDATE dashboard_owner SET login_failures=0,login_window=NULL WHERE id=1`); e != nil {
@@ -377,6 +386,23 @@ func (a *API) dashboard(w http.ResponseWriter, r *http.Request) error {
 		return a.get(w, r, alertID)
 	case create:
 		return a.create(w, r)
+	case devices:
+		items, e := a.devices(r.Context())
+		if e != nil {
+			return e
+		}
+		respond(w, 200, map[string]any{"items": items})
+		return nil
+	case revoke:
+		e := a.revokeDevice(r.Context(), revokeID, false)
+		if e == sql.ErrNoRows {
+			return fail(404, "not_found")
+		}
+		if e != nil {
+			return e
+		}
+		respond(w, 200, map[string]bool{"revoked": true})
+		return nil
 	}
 	return fail(404, "not_found")
 }

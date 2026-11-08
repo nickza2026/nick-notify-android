@@ -63,3 +63,85 @@ Table dashboard_sessions {
 
 Ref: ack_actions.alert_id > alerts.id
 Ref: dashboard_sessions.owner_id > dashboard_owner.id
+
+// Shared-account device extension: editable local implementation diagram.
+// Team/physical-device acceptance and production migration remain separate.
+Table client_keys {
+  key_id text [pk, note: 'Only primary currently; public identifier, never application API key material']
+  owner_id smallint [not null]
+  name text [not null]
+  managed boolean [not null, default: false, note: 'Durable registry routing; zero active devices must never restore legacy fallback']
+}
+
+Table client_devices {
+  id uuid [pk]
+  owner_id smallint [not null]
+  installation_id uuid [not null, unique, note: 'App installation identity, not hardware ID; legacy import can be adopted once']
+  device_name text [not null]
+  active boolean [not null, default: false]
+  legacy_import boolean [not null, default: false]
+  created_at timestamptz [not null]
+  updated_at timestamptz [not null]
+}
+
+Table client_subscriptions {
+  device_id uuid [not null]
+  key_id text [not null]
+  token_hash bytea [not null, unique]
+  token_cipher bytea [not null, note: 'AES-GCM; stable independent external encryption key, no plaintext token']
+
+  indexes {
+    (device_id, key_id) [pk]
+  }
+}
+
+Table client_sessions {
+  token_hash bytea [pk, note: 'Hash only; separate from Dashboard cookie and application API key']
+  owner_id smallint [not null]
+  installation_id uuid [not null, note: 'Login can precede device registration, so intentionally not a device FK']
+  created_at timestamptz [not null]
+  expires_at timestamptz [not null, note: '30-day idle lifetime renewed by successful registration']
+
+  indexes {
+    installation_id
+  }
+}
+
+Table device_deliveries {
+  alert_id text [not null]
+  device_id uuid [not null]
+  device_name text [not null, note: 'Historical snapshot, not a claim of human identity']
+  token_hash bytea [not null, note: 'Snapshot guards cleanup against a later token refresh']
+  capability_hash bytea [not null, unique, note: 'Per-alert-device Ack capability; never plaintext']
+  outcome text [not null, default: 'delivery_unknown']
+  failure_code text
+  provider_accepted_at timestamptz
+  completed_at timestamptz
+  first_ack_at timestamptz
+
+  indexes {
+    (alert_id, device_id) [pk]
+  }
+}
+
+Table device_ack_actions {
+  alert_id text [not null]
+  device_id uuid [not null]
+  client_action_id uuid [not null, note: 'Same human Ack-all action may span alerts; statistics dedup device+action']
+  client_acked_at timestamptz
+  received_at timestamptz [not null]
+
+  indexes {
+    (alert_id, device_id, client_action_id) [pk]
+    (alert_id, received_at)
+  }
+}
+
+Ref: client_keys.owner_id > dashboard_owner.id
+Ref: client_devices.owner_id > dashboard_owner.id
+Ref: client_subscriptions.device_id > client_devices.id
+Ref: client_subscriptions.key_id > client_keys.key_id
+Ref: client_sessions.owner_id > dashboard_owner.id
+Ref: device_deliveries.alert_id > alerts.id
+Ref: device_deliveries.device_id > client_devices.id
+Ref: device_ack_actions.(alert_id, device_id) > device_deliveries.(alert_id, device_id)

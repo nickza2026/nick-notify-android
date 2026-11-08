@@ -33,6 +33,21 @@ DASHBOARD_BOOTSTRAP_PASSWORD=<private-random-initial-password-at-least-32-bytes>
 - Session มี absolute expiry 24 ชั่วโมง เปลี่ยน password แล้ว revoke session เดิมทั้งหมด Logout revoke session นั้น ไม่ใช้บัญชี browser ไปปลอม Ack บนมือถือ
 - รอบนี้ไม่มี public signup หรือ anonymous forgot-password/reset-email ถ้าลืมรหัสต้องใช้วิธี operator ที่ตรวจสิทธิ์และอนุมัติแยก ไม่ลบ/แก้ข้อมูลในฐานจริงโดยเดา
 
+## ส่วนขยาย Android บัญชีเดียวหลายเครื่อง
+
+ส่วนนี้เป็นการเตรียม configuration ไม่ใช่หลักฐานว่าได้ rollout/ส่งถึงมือถือจริงแล้ว API ต้องมี public HTTPS ที่ APK เข้าถึงได้ และ `ACK_PUBLIC_BASE_URL` ต้องชี้เส้นทาง API รับทราบที่เข้าถึงจากมือถือได้ ไม่ใช้ internal hostname ของ Web BFF
+
+- เพิ่ม `DEVICE_TOKEN_ENCRYPTION_KEY` ใน environment ของ **API เท่านั้น** เป็น base64url แบบไม่เติม padding ซึ่ง decode แล้วได้ 32 bytes ใช้ secret store/private configuration ที่ได้รับอนุญาต ห้ามใส่ใน APK, browser, Git หรือแชต
+- เก็บ key นี้ให้คงเดิมข้าม restart/redeploy และทุก instance ที่ใช้ข้อมูลชุดเดียวกัน แยกจาก `ALERT_API_KEY` เพื่อหมุน application key ได้โดยไม่ทำให้ทะเบียน FCM เดิมอ่านไม่ได้ ห้ามสุ่มทับทุกครั้งที่เริ่ม process
+- เมื่อยังไม่ตั้งค่าที่จำเป็น การลงทะเบียนต้องไม่สลับเส้นทางส่งเดิมไปเป็นระบบที่ยังส่งไม่ได้ ดู error ที่ API ตอบ ไม่สรุปจากการ login สำเร็จ
+- เมื่อเริ่มใช้ทะเบียน จะเก็บปลายทางเดิมเป็นสมาชิกที่ยกเลิกได้ และรับเครื่องใหม่เพิ่ม ไม่ตัดเครื่องเดิมออกเพราะแฟน login ก่อน การลงทะเบียน token ของเครื่องเดิมต้องไม่เพิ่มปลายทางซ้ำ
+- หลังเข้าสู่โหมดทะเบียนแล้ว การยกเลิกเครื่องสุดท้ายหมายถึงไม่มีปลายทาง ไม่ย้อนกลับไปส่งหา static token เก่า การ restart/rerun การเตรียมข้อมูลต้องไม่ปลุกทะเบียนที่ยกเลิกแล้วกลับมา
+- ไม่ถอนข้อความที่กำลังส่งหรือหยุดเสียงที่เริ่มแล้วจากการ revoke/logout; กดรับทราบในเครื่องนั้นเอง Pending Ack ของเหตุการณ์เก่ายังต้อง sync ได้
+- Native session เป็นของ installation แต่ละเครื่อง อายุ idle 30 วันและต่ออายุด้วยทะเบียนที่สำเร็จ ไม่ใช่ Web session 24 ชั่วโมง เปลี่ยนรหัสอาจทำให้เครื่องอื่นต้อง login ใหม่
+- รายละเอียด API/การแสดงผล/ข้อผิดพลาดสำหรับ client อยู่ใน [shared-device handoff](fe-shared-devices-th.md) ไม่ใช้การคัดลอก master API key หรือ FCM token เป็นขั้นตอนปกติของ APK รุ่นใหม่
+
+ก่อนให้ผู้ใช้สองเครื่องใช้งานจริง ต้อง deploy API ที่รองรับ contract นี้และตั้ง secrets/HTTPS ให้พร้อมก่อน แล้วสร้าง APK ด้วย signing workflow เดิม อย่า uninstall/reset แอปเดิมเพื่อฝืนติดตั้ง APK คนละ signer เพราะอาจทำให้ข้อมูลรับทราบและ pending Ack ในเครื่องหายไป การอนุมัติทำฟีเจอร์ไม่ใช่การอนุมัติ deploy/ส่ง FCM จริง
+
 ## Web — notify-alarm-web
 
 ```dotenv

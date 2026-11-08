@@ -53,7 +53,7 @@ func testDB(t *testing.T) *sql.DB {
 }
 func testAPI(t *testing.T, db *sql.DB, s Sender) *API {
 	t.Helper()
-	a := &API{DB: db, Key: testKey, Sender: s, AckBase: "https://example.test/base"}
+	a := &API{DB: db, Key: testKey, DeviceTokenKey: []byte("0123456789abcdef0123456789abcdef"), Sender: s, AckBase: "https://example.test/base"}
 	if _, err := a.Handler(); err != nil {
 		t.Fatal(err)
 	}

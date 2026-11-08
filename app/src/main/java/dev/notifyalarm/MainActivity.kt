@@ -20,6 +20,7 @@ import android.provider.Settings
 import android.net.Uri
 import android.view.View
 import android.widget.Button
+import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -30,6 +31,10 @@ import dev.notifyalarm.core.AlarmEngine
 import dev.notifyalarm.core.AlarmStore
 import dev.notifyalarm.core.AlarmSoundSettings
 import dev.notifyalarm.sync.AckSync
+import dev.notifyalarm.sync.ClientAccount
+import dev.notifyalarm.sync.ClientApi
+import dev.notifyalarm.sync.ClientPolicy
+import dev.notifyalarm.sync.ClientRegistration
 import java.util.UUID
 
 /** Local-first test screen. No server API key or Firebase credentials in source. */
@@ -39,6 +44,12 @@ class MainActivity : Activity() {
     private lateinit var remote: TextView
     private lateinit var sound: TextView
     private lateinit var ackStatus: TextView
+    private lateinit var accountStatus: TextView
+    private lateinit var accountMessage: TextView
+    private lateinit var serverInput: EditText
+    private lateinit var userInput: EditText
+    private lateinit var passwordInput: EditText
+    private lateinit var deviceInput: EditText
     private val handler = Handler(Looper.getMainLooper())
     private val refresh = object : Runnable {
         override fun run() { updateStatus(); handler.postDelayed(this, 1000) }
@@ -121,6 +132,60 @@ class MainActivity : Activity() {
             "มี Firebase config ใน APK แล้ว — กดปุ่มด้านล่างเพื่อขอ FCM token ยังไม่ได้ยืนยันการรับ push จริง"
             else "ยังไม่ได้ตั้งค่า Firebase — ทดสอบเสียงในเครื่องได้ แต่ยังไม่พร้อมรับเหตุการณ์จาก server")
         button("ตรวจการตั้งค่า Firebase / คัดลอก token") { inspectFirebase() }
+        text("บัญชีและเครื่องที่รับแจ้งเตือน", 22f)
+        fun input(hint: String, secret: Boolean = false) = EditText(this).apply {
+            this.hint = hint
+            if (secret) inputType = android.text.InputType.TYPE_CLASS_TEXT or
+                android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
+            layout.addView(this, LinearLayout.LayoutParams(-1, -2))
+        }
+        serverInput = input("HTTPS server URL เช่น https://example.com")
+        userInput = input("ชื่อผู้ใช้ (บัญชีเดียวกันทั้งสองเครื่อง)")
+        passwordInput = input("รหัสผ่าน", true)
+        deviceInput = input("ชื่อเครื่อง เช่น โทรศัพท์ของฉัน")
+        accountStatus = text(ClientRegistration.status(this))
+        accountMessage = text("")
+        button("เข้าสู่ระบบและลงทะเบียนเครื่อง") { login() }
+        button("ตรวจสอบ / ส่งลงทะเบียนอีกครั้ง") {
+            requestFirebaseRegistration()
+            accountTask { session ->
+                val result = ClientApi.call(session.base, "/v1/client/session", session.bearer)
+                if (result.status == 401) ClientAccount.requireLogin(this, session.generation)
+                if (result.status == 200) ClientRegistration.enqueue(this)
+                if (result.status == 200) "ตรวจสอบเซสชันแล้ว กำลังลงทะเบียน" else "ตรวจสอบไม่ได้ กรุณาดูสถานะบัญชี"
+            }
+        }
+        button("ดูคีย์ที่อนุญาตและเครื่องที่ลงทะเบียน") {
+            accountTask { session ->
+                if (session.mustChange) "ต้องเปลี่ยนรหัสผ่านก่อน" else {
+                    val keys = ClientApi.call(session.base, "/v1/client/keys", session.bearer)
+                    val devices = ClientApi.call(session.base, "/v1/client/devices", session.bearer)
+                    if (keys.status != 200 || devices.status != 200) "อ่านรายการเครื่องไม่ได้ กรุณาตรวจเซสชัน" else {
+                        val items = devices.body.optJSONArray("items")
+                        val names = (0 until (items?.length() ?: 0)).mapNotNull { i ->
+                            items?.optJSONObject(i)?.let { device ->
+                                val label = device.optString("device_name").take(80)
+                                "$label: ${if (device.optBoolean("active")) "ใช้งาน" else "ไม่ใช้งาน"}"
+                            }
+                        }
+                        "คีย์ที่อนุญาต: ${keys.body.optJSONArray("items")?.length() ?: 0} · เครื่อง: ${names.size}\n" +
+                            names.take(20).joinToString("\n")
+                    }
+                }
+            }
+        }
+        button("เปลี่ยนรหัสผ่าน") { changePassword() }
+        button("ยืนยันออกจากระบบที่ค้างด้วยรหัสผ่านบัญชีเดิม") { recoverLogout() }
+        button("ออกจากระบบ (ไม่หยุดเสียงปลุกที่กำลังเล่น)") {
+            if (ClientAccount.session(this) == null) {
+                ClientAccount.cancelLogin(this)
+                accountMessage.text = "ยกเลิกการเข้าสู่ระบบที่ยังไม่เสร็จ"
+                return@button
+            }
+            if (ClientAccount.markLogout(this)) ClientRegistration.pendingLogout(this)
+            accountStatus.text = ClientRegistration.status(this)
+        }
+        text("เครื่องอื่นที่ใช้บัญชีเดียวกันลงทะเบียนแยกกัน การออกจากระบบมีผลกับ push ครั้งถัดไป ไม่ลบรายการรับทราบและไม่หยุดเสียงที่กำลังเล่น")
         text("การรับทราบกลับ server", 22f)
         ackStatus = text("กำลังตรวจคิว Ack…")
         button("ลองส่ง Ack ที่ค้างอีกครั้ง") {
@@ -135,6 +200,13 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         try { AckSync.enqueue(this) } catch (_: Exception) { }
+        try {
+            ClientRegistration.periodic(this)
+            if (ClientAccount.session(this) != null || ClientAccount.pendingLogout(this)) {
+                if (!ClientAccount.pendingLogout(this)) requestFirebaseRegistration()
+                ClientRegistration.enqueue(this)
+            }
+        } catch (_: Exception) { }
         handler.post(refresh)
     }
     override fun onPause() { handler.removeCallbacks(refresh); super.onPause() }
@@ -165,6 +237,141 @@ class MainActivity : Activity() {
             }
         sound.text = "เสียงที่ใช้: ${AlarmSoundSettings.label(this)}\nเปลี่ยนแล้วมีผลเมื่อเริ่มเสียงครั้งถัดไป หากเล่นไม่ได้จะใช้เสียงสำรองของแอป"
         ackStatus.text = AckSync.status(this)
+        accountStatus.text = ClientRegistration.status(this)
+    }
+
+    private fun requestFirebaseRegistration() {
+        if (FirebaseApp.getApps(this).none { it.name == FirebaseApp.DEFAULT_APP_NAME }) return
+        FirebaseMessaging.getInstance().token.addOnSuccessListener { token ->
+            if (!ClientPolicy.token(token)) return@addOnSuccessListener
+            val changed = synchronized(ClientAccount.lock) {
+                val prefs = getSharedPreferences(dev.notifyalarm.core.AlertMessagingService.PUSH_PREFERENCES, MODE_PRIVATE)
+                val changed = prefs.getString(dev.notifyalarm.core.AlertMessagingService.TOKEN_KEY, null) != token
+                prefs
+                    .edit().putString(dev.notifyalarm.core.AlertMessagingService.TOKEN_KEY, token)
+                    .putBoolean("needs_registration", changed || prefs.getBoolean("needs_registration", true)).commit()
+                changed
+            }
+            ClientRegistration.enqueue(this, tokenChanged = changed)
+        }
+    }
+
+    private fun login() {
+        val base = ClientPolicy.baseUrl(serverInput.text.toString())
+        val username = userInput.text.toString().trim()
+        val password = passwordInput.text.toString()
+        val name = deviceInput.text.toString().trim()
+        passwordInput.text.clear()
+        if (base == null || username.isBlank() || password.isBlank() || !ClientPolicy.deviceName(name)) {
+            accountMessage.text = "กรุณากรอก HTTPS URL ชื่อผู้ใช้ รหัสผ่าน และชื่อเครื่อง (1–80 ตัวอักษร)"
+            return
+        }
+        if (ClientAccount.pendingLogout(this)) {
+            accountMessage.text = "รอ server ยืนยันออกจากระบบก่อนเข้าสู่ระบบใหม่"
+            return
+        }
+        if (ClientAccount.session(this) != null) {
+            accountMessage.text = "กรุณาออกจากระบบเดิมก่อนเข้าสู่ระบบใหม่"
+            return
+        }
+        val ticket = ClientAccount.loginTicket(this) ?: run {
+            accountMessage.text = "สถานะบัญชีเปลี่ยนแล้ว กรุณาลองใหม่"; return
+        }
+        accountMessage.text = "กำลังเข้าสู่ระบบ…"
+        Thread {
+            val message = try {
+                ClientRegistration.mutateIfCurrent({ ClientAccount.ticketCurrent(this, ticket) }) {
+                    val response = ClientApi.login(base, username, password, ticket.installation)
+                    val login = ClientApi.extractLogin(response, username)
+                    if (login != null && ClientAccount.saveLogin(this, ticket, base, login.first, name,
+                            username, login.third, login.second)) {
+                        if (!login.third) { requestFirebaseRegistration(); ClientRegistration.enqueue(this) }
+                        if (login.third) "เข้าสู่ระบบแล้ว ต้องเปลี่ยนรหัสผ่านก่อนลงทะเบียน" else
+                            "เข้าสู่ระบบแล้ว กำลังลงทะเบียนเครื่อง"
+                    } else if (response.status == 401) "ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง" else {
+                        "เข้าสู่ระบบไม่สำเร็จ หรือสถานะบัญชีเปลี่ยนแล้ว"
+                    }
+                } ?: "สถานะบัญชีเปลี่ยนแล้ว ไม่ส่งคำขอเข้าสู่ระบบซ้ำ"
+            } catch (_: Exception) { "เชื่อมต่อไม่ได้ / เก็บเซสชันอย่างปลอดภัยไม่ได้" }
+            runOnUiThread { if (!isDestroyed) accountMessage.text = message }
+        }.start()
+    }
+
+    private fun changePassword() {
+        val session = ClientAccount.session(this) ?: run {
+            accountMessage.text = "กรุณาเข้าสู่ระบบก่อน"; return
+        }
+        val container = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        fun field(hint: String) = EditText(this).apply {
+            this.hint = hint
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
+            container.addView(this)
+        }
+        val current = field("รหัสผ่านเดิม")
+        val replacement = field("รหัสผ่านใหม่ (อย่างน้อย 15 ตัวอักษร)")
+        val confirm = field("ยืนยันรหัสผ่านใหม่")
+        AlertDialog.Builder(this).setTitle("เปลี่ยนรหัสผ่าน").setView(container)
+            .setNegativeButton("ยกเลิก", null).setPositiveButton("เปลี่ยน") { _, _ ->
+                val old = current.text.toString()
+                val fresh = replacement.text.toString()
+                if (!ClientPolicy.password(fresh) || fresh != confirm.text.toString()) {
+                    accountMessage.text = "รหัสผ่านใหม่ต้องยาวอย่างน้อย 15 ตัวอักษร ไม่เกิน 128 ไบต์ และตรงกัน"
+                } else Thread {
+                    val result = try {
+                        ClientRegistration.mutateIfCurrent({ ClientAccount.isCurrent(this, session) }) {
+                            val response = ClientApi.changePassword(session, old, fresh)
+                            val rotated = ClientApi.extractLogin(response, session.username)
+                            if (rotated != null && ClientAccount.rotate(this, session, rotated.first,
+                                    rotated.third, rotated.second)) {
+                                ClientRegistration.enqueue(this)
+                                "เปลี่ยนรหัสผ่านแล้ว กำลังลงทะเบียนเครื่อง"
+                            } else "เปลี่ยนรหัสผ่านไม่สำเร็จ หรือเซสชันเปลี่ยนแล้ว"
+                        } ?: "เซสชันเปลี่ยนแล้ว ไม่ส่งคำขอเปลี่ยนรหัสผ่านซ้ำ"
+                    } catch (_: Exception) { "เชื่อมต่อไม่ได้ กรุณาลองใหม่" }
+                    runOnUiThread { if (!isDestroyed) accountMessage.text = result }
+                }.start()
+            }.show()
+    }
+
+    private fun recoverLogout() {
+        val old = ClientAccount.session(this)
+        if (old == null || !ClientAccount.pendingLogout(this) ||
+            !ClientAccount.logoutAuthenticationRequired(this)) {
+            accountMessage.text = "ไม่มีรายการออกจากระบบที่ต้องยืนยันรหัสผ่าน"; return
+        }
+        val password = passwordInput.text.toString()
+        passwordInput.text.clear()
+        if (password.isBlank()) { accountMessage.text = "ใส่รหัสผ่านบัญชีเดิมก่อน"; return }
+        accountMessage.text = "กำลังยืนยันเพื่อออกจากระบบ…"
+        Thread {
+            val message = try {
+                ClientRegistration.mutateIfCurrent({
+                    ClientAccount.pendingLogout(this) && ClientAccount.logoutAuthenticationRequired(this) &&
+                        ClientAccount.session(this)?.let { current ->
+                            current.generation == old.generation && current.bearer == old.bearer &&
+                                current.base == old.base && current.installation == old.installation &&
+                                current.username == old.username
+                        } == true
+                }) {
+                    val reply = ClientApi.login(old.base, old.username, password, old.installation)
+                    val rotated = ClientApi.extractLogin(reply, old.username)
+                    if (rotated != null && ClientAccount.replacePendingBearer(this, old, rotated.first,
+                            rotated.second)) {
+                        ClientRegistration.pendingLogout(this)
+                        "กำลังส่งคำขอออกจากระบบอีกครั้ง เครื่องยังอาจได้รับแจ้งเตือน"
+                    } else "ยืนยันไม่ได้ กรุณาตรวจรหัสผ่านบัญชีเดิม หรือเพิกถอนเครื่องจาก Dashboard"
+                } ?: "รายการออกจากระบบเปลี่ยนแล้ว ไม่ส่งคำขอยืนยันซ้ำ"
+            } catch (_: Exception) { "เชื่อมต่อไม่ได้ รายการออกจากระบบยังค้างอยู่" }
+            runOnUiThread { if (!isDestroyed) accountMessage.text = message }
+        }.start()
+    }
+
+    private fun accountTask(action: (ClientAccount.Session) -> String) {
+        val session = ClientAccount.session(this) ?: run { accountMessage.text = "กรุณาเข้าสู่ระบบก่อน"; return }
+        Thread {
+            val result = try { action(session) } catch (_: Exception) { "เชื่อมต่อไม่ได้ กรุณาลองใหม่" }
+            runOnUiThread { if (!isDestroyed) accountMessage.text = result }
+        }.start()
     }
 
     private fun chooseSound() {

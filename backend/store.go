@@ -54,7 +54,7 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 	if _, e = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(739148521)`); e != nil {
 		return e
 	}
-	for _, name := range []string{"001_init.sql", "002_dashboard_auth.sql"} {
+	for _, name := range []string{"001_init.sql", "002_dashboard_auth.sql", "003_shared_devices.sql"} {
 		b, err := migrations.ReadFile("migrations/" + name)
 		if err != nil {
 			return err
@@ -83,9 +83,11 @@ type Action struct {
 	ClientActionID string     `json:"client_action_id"`
 	ClientAckedAt  *time.Time `json:"client_acked_at"`
 	ReceivedAt     time.Time  `json:"received_at"`
+	DeviceID       *string    `json:"device_id"`
+	DeviceName     *string    `json:"device_name"`
 }
 
-const alertColumns = `a.id,a.title,a.message,a.importance,a.outcome,a.created_at,a.provider_accepted_at,a.expires_at,a.first_ack_at,(SELECT COUNT(*) FROM ack_actions x WHERE x.alert_id=a.id),(SELECT MAX(x.received_at) FROM ack_actions x WHERE x.alert_id=a.id)`
+const alertColumns = `a.id,a.title,a.message,a.importance,a.outcome,a.created_at,a.provider_accepted_at,a.expires_at,a.first_ack_at,(SELECT COUNT(*) FROM all_ack_actions x WHERE x.alert_id=a.id),(SELECT MAX(x.received_at) FROM all_ack_actions x WHERE x.alert_id=a.id)`
 
 func scanAlert(row interface{ Scan(...any) error }) (a Alert, e error) {
 	var accepted, first, last sql.NullTime
@@ -119,7 +121,7 @@ func receipt(ctx context.Context, db *sql.DB, id string) (Alert, []Action, error
 	if e != nil {
 		return a, nil, e
 	}
-	rows, e := tx.QueryContext(ctx, `SELECT client_action_id::text,client_acked_at,received_at FROM ack_actions WHERE alert_id=$1 ORDER BY received_at,client_action_id`, id)
+	rows, e := tx.QueryContext(ctx, `SELECT client_action_id::text,client_acked_at,received_at,device_id::text,device_name FROM all_ack_actions WHERE alert_id=$1 ORDER BY received_at,client_action_id`, id)
 	if e != nil {
 		return a, nil, e
 	}
@@ -128,7 +130,8 @@ func receipt(ctx context.Context, db *sql.DB, id string) (Alert, []Action, error
 	for rows.Next() {
 		var x Action
 		var t sql.NullTime
-		if e = rows.Scan(&x.ClientActionID, &t, &x.ReceivedAt); e != nil {
+		var deviceID, deviceName sql.NullString
+		if e = rows.Scan(&x.ClientActionID, &t, &x.ReceivedAt, &deviceID, &deviceName); e != nil {
 			return a, nil, e
 		}
 		if t.Valid {
@@ -136,6 +139,10 @@ func receipt(ctx context.Context, db *sql.DB, id string) (Alert, []Action, error
 			x.ClientAckedAt = &v
 		}
 		x.ReceivedAt = x.ReceivedAt.UTC()
+		if deviceID.Valid {
+			x.DeviceID = &deviceID.String
+			x.DeviceName = &deviceName.String
+		}
 		acts = append(acts, x)
 	}
 	if e = rows.Err(); e != nil {
@@ -229,7 +236,7 @@ func stats(ctx context.Context, db *sql.DB, from, to *time.Time) (Stats, error) 
 	if to != nil {
 		t = *to
 	}
-	e := db.QueryRowContext(ctx, `WITH scoped AS (SELECT * FROM alerts WHERE ($1::timestamptz IS NULL OR created_at >= $1) AND ($2::timestamptz IS NULL OR created_at < $2)) SELECT COUNT(*),COUNT(*) FILTER (WHERE outcome='provider_accepted'),COUNT(*) FILTER (WHERE outcome='provider_failed'),COUNT(*) FILTER (WHERE outcome='delivery_unknown'),COUNT(*) FILTER (WHERE EXISTS(SELECT 1 FROM ack_actions x WHERE x.alert_id=scoped.id)),COUNT(*) FILTER (WHERE outcome='provider_accepted' AND NOT EXISTS(SELECT 1 FROM ack_actions x WHERE x.alert_id=scoped.id)),(SELECT COUNT(DISTINCT client_action_id) FROM ack_actions x JOIN scoped a ON a.id=x.alert_id) FROM scoped`, f, t).Scan(&s.TotalAlerts, &s.ProviderAccepted, &s.ProviderFailed, &s.DeliveryUnknown, &s.Acknowledged, &s.PendingAck, &s.AckActionCount)
+	e := db.QueryRowContext(ctx, `WITH scoped AS (SELECT * FROM alerts WHERE ($1::timestamptz IS NULL OR created_at >= $1) AND ($2::timestamptz IS NULL OR created_at < $2)) SELECT COUNT(*),COUNT(*) FILTER (WHERE outcome='provider_accepted'),COUNT(*) FILTER (WHERE outcome='provider_failed'),COUNT(*) FILTER (WHERE outcome='delivery_unknown'),COUNT(*) FILTER (WHERE EXISTS(SELECT 1 FROM all_ack_actions x WHERE x.alert_id=scoped.id)),COUNT(*) FILTER (WHERE outcome='provider_accepted' AND NOT EXISTS(SELECT 1 FROM all_ack_actions x WHERE x.alert_id=scoped.id)),(SELECT COUNT(DISTINCT x.client_action_id) FROM ack_actions x JOIN scoped a ON a.id=x.alert_id)+(SELECT COUNT(DISTINCT (x.device_id,x.client_action_id)) FROM device_ack_actions x JOIN scoped a ON a.id=x.alert_id) FROM scoped`, f, t).Scan(&s.TotalAlerts, &s.ProviderAccepted, &s.ProviderFailed, &s.DeliveryUnknown, &s.Acknowledged, &s.PendingAck, &s.AckActionCount)
 	return s, e
 }
 func legacyID(id string) string {

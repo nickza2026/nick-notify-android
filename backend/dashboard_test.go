@@ -116,10 +116,7 @@ func TestDashboardLifecycleAndUpgrade(t *testing.T) {
 		mustStatus(t, c, 200)
 		return v["session_token"].(string)
 	}
-	// Explicitly simulate an already-applied 001 database with old alert/ACK rows.
-	if _, e := db.Exec(`DROP TABLE dashboard_sessions; DROP TABLE dashboard_owner`); e != nil {
-		t.Fatal(e)
-	}
+	// Seed historical alert/ACK facts before simulating an already-applied 001 database.
 	body := `{"alert_id":"preserved","title":"test","message":"synthetic"}`
 	c, _, _ := call(t, a, "POST", "/v1/alerts", testKey, "preserved-key", body)
 	mustStatus(t, c, 202)
@@ -127,6 +124,10 @@ func TestDashboardLifecycleAndUpgrade(t *testing.T) {
 	action := fmt.Sprintf(`{"client_action_id":%q}`, uuid.NewString())
 	c, _, _ = call(t, a, "POST", "/v1/alerts/preserved/ack", cap, "", action)
 	mustStatus(t, c, 200)
+	// Remove only tables/views introduced by later migrations in this owned test DB.
+	if _, e := db.Exec(`DROP VIEW all_ack_actions; DROP TABLE device_ack_actions, device_deliveries, client_subscriptions, client_sessions, client_devices, client_keys, dashboard_sessions, dashboard_owner`); e != nil {
+		t.Fatal(e)
+	}
 	for i := 0; i < 2; i++ {
 		if e := Migrate(ctx, db); e != nil {
 			t.Fatal(e)
