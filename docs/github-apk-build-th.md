@@ -7,7 +7,7 @@
 | Trigger | สิ่งที่ทำ | APK สำหรับ Pixel |
 |---|---|---|
 | Push / PR / tag | **ไม่เริ่ม Android workflow**; ไม่มี automatic compile/test/APK บน `main` | ไม่มี artifact จาก trigger เหล่านี้ |
-| กด **Actions → Build Android Alarm APK → Run workflow** บน `main` | ตรวจ tests ก่อน แล้วใช้ Firebase client + signing key จาก GitHub Actions Secrets สร้าง APK 0.6 ตรวจ certificate/version และ upload artifact | ใช้อัปเดตแอปเดิมได้ **เฉพาะเมื่อ** signing key ตรงกับ APK เดิมและ Android ตรวจรับจริง; ไม่มีการติดตั้งลงมือถือโดย Actions |
+| กด **Actions → Build Android Alarm APK → Run workflow** บน `main` | ตรวจ guard contracts/compile/tests/lint ก่อน แล้วใช้ Firebase client + signing key จาก GitHub Actions Secrets สร้าง APK 0.7 ตรวจ certificate/version และ upload artifact | ใช้อัปเดตแอปเดิมได้ **เฉพาะเมื่อ** signing key ตรงกับ APK เดิมและ Android ตรวจรับจริง; ไม่มีการติดตั้งลงมือถือโดย Actions |
 
 งาน manual จะ **fail แบบไม่สร้าง APK artifact** หากยังไม่กำหนด Secrets หรือ signer ผิด โดยตรวจ fingerprint ของ keystore ที่ถอดจาก Secret **ก่อน build** และบังคับ Gradle ใช้ไฟล์นั้นผ่าน `NOTIFY_CI_DEBUG_KEYSTORE` แล้วตรวจลายเซ็น APK ซ้ำก่อน upload จึงไม่ fallback ไปใช้ debug key ที่ runner สร้างเองหรือ APK ที่ไม่มี FCM ห้ามแก้ workflow ให้ข้ามขั้นตรวจ signer เพื่อให้ CI ผ่าน
 
@@ -34,6 +34,16 @@ $keystorePath = 'D:\private\notify-alarm\existing-debug.keystore'
 
 ## วิธีดาวน์โหลดและตรวจ
 
-หลัง manual workflow ผ่าน ให้เปิด run นั้น → **Artifacts** → `notify-alarm-0.6.0-safety-debug-<commit>` แตกไฟล์ zip แล้วได้ `notify-alarm-0.6.0-safety-debug.apk` ตรวจว่ามาจาก run บน `main` ที่คุณตั้งใจและ versionCode 6 ก่อนติดตั้งทับ (`adb install -r` หรือเปิด APK บน Pixel); **อย่าถอนแอป/ล้างข้อมูล** เพราะ pending Ack/tombstones อยู่ในเครื่อง Artifact หมดอายุใน 7 วัน ไม่ใช่ release/production signature
+หลัง manual workflow ของ revision ที่รวมการแก้นี้ผ่าน ให้เปิด run นั้น → **Artifacts** → `notify-alarm-0.7.0-device-login-debug-<commit>` แตกไฟล์ zip แล้วได้ `notify-alarm-0.7.0-device-login-debug.apk` ตรวจว่ามาจาก run บน `main` ที่คุณตั้งใจและเป็น `versionCode 7 / versionName 0.7.0-device-login` ก่อนติดตั้งทับ (`adb install -r` หรือเปิด APK บน Pixel); **อย่าถอนแอป/ล้างข้อมูล** เพราะ pending Ack/tombstones อยู่ในเครื่อง Artifact หมดอายุใน 7 วัน ไม่ใช่ release/production signature
+
+## ตรวจเมื่อแก้เวอร์ชันแอปหรือ upload guard
+
+Version/package ใน `app/build.gradle.kts`, upload guard และชื่อ artifact ต้องตรงกัน ไม่ปิด guard หรือเปลี่ยน certificate pin เพื่อให้ผ่าน รันทวนด้วย:
+
+```text
+node --test tools/test-android-apk-workflow.mjs tools/test-standalone-nortezh.mjs
+```
+
+APK verify job รัน regression นี้ก่อน compile และก่อน signed job เข้าถึง private setup ทดสอบใช้ Bash ของ guard จริงกับ SDK/APK **จำลอง** ตรวจทั้งรุ่นปัจจุบัน/รุ่นเก่า/package ผิด/signer ผิด/ไม่มีไฟล์/เครื่องมือล้มเหลว และชื่อ artifact ไม่มีการอ่าน private key หรือเซ็น APK จริง ผลทดสอบ local ไม่ใช่หลักฐานว่า manual signed build รอบใหม่ผ่านหรือมี APK ใหม่ให้ดาวน์โหลดแล้ว
 
 ผ่าน build/lint/JVM tests หรือ Actions artifact ไม่ได้ยืนยัน `Go → FCM → Pixel → เสียง → Ack ผ่าน HTTPS → PostgreSQL` และไม่ได้พิสูจน์ Doze/เสียงจริง ต้องทดสอบ synthetic incident บน Pixel ตาม [checklist normal/critical](notification-importance-th.md) เมื่อพร้อมให้เครื่องดัง โดยรักษา secrets/TLS/ฐานข้อมูลแยกไว้หลังบ้าน
