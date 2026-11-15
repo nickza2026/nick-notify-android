@@ -78,9 +78,12 @@ for (const [name, options] of [
 
 test('artifact name/path agree with Gradle and only a successful guard can upload', () => {
   assert.ok(workflow.includes(`name: ${artifact.slice(0, -4)}-` + '${{ github.sha }}'));
-  assert.ok(workflow.includes('path: ${{ runner.temp }}/' + artifact));
   const upload = workflow.split('      - uses: actions/upload-artifact@v4')[1]?.split(/^      - /m)[0];
   assert.ok(upload);
+  // APK plus updater descriptor use a multiline YAML path list.
+  const paths = upload.match(/^          path: \|\r?\n((?:            .*\r?\n)+)/m)?.[1]
+    .split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+  assert.deepEqual(paths, ['${{ runner.temp }}/' + artifact, '${{ runner.temp }}/notify-alarm-update.json']);
   assert.doesNotMatch(upload, /\bif:/, 'do not upload on a failed verification step');
   assert.match(upload, /if-no-files-found: error/);
 });

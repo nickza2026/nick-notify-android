@@ -7,7 +7,8 @@
 | Trigger | สิ่งที่ทำ | APK สำหรับ Pixel |
 |---|---|---|
 | Push / PR / tag | **ไม่เริ่ม Android workflow**; ไม่มี automatic compile/test/APK บน `main` | ไม่มี artifact จาก trigger เหล่านี้ |
-| กด **Actions → Build Android Alarm APK → Run workflow** บน `main` | ตรวจ guard contracts/compile/tests/lint ก่อน แล้วใช้ Firebase client + signing key จาก GitHub Actions Secrets สร้าง APK 0.7 ตรวจ certificate/version และ upload artifact | ใช้อัปเดตแอปเดิมได้ **เฉพาะเมื่อ** signing key ตรงกับ APK เดิมและ Android ตรวจรับจริง; ไม่มีการติดตั้งลงมือถือโดย Actions |
+| กด **Actions → Build Android Alarm APK → Run workflow** บน `main` โดยปล่อย `publish_update=false` (ค่าเริ่มต้น) | ตรวจ guard contracts/compile/tests/lint ก่อน แล้วใช้ Firebase client + signing key จาก GitHub Actions Secrets สร้าง APK 0.8 ตรวจ certificate/version แล้ว upload artifact APK พร้อม descriptor | ใช้อัปเดตแอปเดิมได้ **เฉพาะเมื่อ** signing key ตรงกับ APK เดิมและ Android ตรวจรับจริง; ไม่เผยแพร่ release อัตโนมัติ |
+| กด manual บน `main` และตั้ง `publish_update=true` โดยเจตนา | หลัง signed artifact สำเร็จเท่านั้น ตรวจ APK/descriptor อีกครั้งแล้วสร้าง public GitHub Release แบบ stable/latest ที่ tag `android-v0.8.0-in-app-updates` ชี้ commit ที่รัน workflow | เป็นการอนุมัติเผยแพร่ APK ต่อสาธารณะ; tag ที่มีอยู่แล้วจะไม่ถูกเขียนทับ |
 
 งาน manual จะ **fail แบบไม่สร้าง APK artifact** หากยังไม่กำหนด Secrets หรือ signer ผิด โดยตรวจ fingerprint ของ keystore ที่ถอดจาก Secret **ก่อน build** และบังคับ Gradle ใช้ไฟล์นั้นผ่าน `NOTIFY_CI_DEBUG_KEYSTORE` แล้วตรวจลายเซ็น APK ซ้ำก่อน upload จึงไม่ fallback ไปใช้ debug key ที่ runner สร้างเองหรือ APK ที่ไม่มี FCM ห้ามแก้ workflow ให้ข้ามขั้นตรวจ signer เพื่อให้ CI ผ่าน
 
@@ -34,14 +35,18 @@ $keystorePath = 'D:\private\notify-alarm\existing-debug.keystore'
 
 ## วิธีดาวน์โหลดและตรวจ
 
-หลัง manual workflow ของ revision ที่รวมการแก้นี้ผ่าน ให้เปิด run นั้น → **Artifacts** → `notify-alarm-0.7.0-device-login-debug-<commit>` แตกไฟล์ zip แล้วได้ `notify-alarm-0.7.0-device-login-debug.apk` ตรวจว่ามาจาก run บน `main` ที่คุณตั้งใจและเป็น `versionCode 7 / versionName 0.7.0-device-login` ก่อนติดตั้งทับ (`adb install -r` หรือเปิด APK บน Pixel); **อย่าถอนแอป/ล้างข้อมูล** เพราะ pending Ack/tombstones อยู่ในเครื่อง Artifact หมดอายุใน 7 วัน ไม่ใช่ release/production signature
+หลัง manual workflow ของ revision ที่รวมการแก้นี้ผ่าน ให้เปิด run นั้น → **Artifacts** → `notify-alarm-0.8.0-in-app-updates-debug-<commit>` แตกไฟล์ zip แล้วได้ `notify-alarm-0.8.0-in-app-updates-debug.apk` และ `notify-alarm-update.json` ตรวจว่ามาจาก run บน `main` ที่คุณตั้งใจและเป็น `versionCode 8 / versionName 0.8.0-in-app-updates` ก่อนติดตั้งทับ (`adb install -r` หรือเปิด APK บน Pixel); **อย่าถอนแอป/ล้างข้อมูล** เพราะ pending Ack/tombstones อยู่ในเครื่อง Artifact หมดอายุใน 7 วัน
+
+ตัวอัปเดตอ่าน public GitHub API `https://api.github.com/repos/nickza2026/nick-notify-android/releases/latest` เท่านั้น และรับ release ที่ไม่ใช่ draft/prerelease กับ tag `android-v<version_name>` โดยใช้ asset ชื่อ APK ข้างต้นกับ `notify-alarm-update.json` (schema 1, package `dev.notifyalarm`, version code/name, SHA-256, byte size ไม่เกิน 128 MiB และ certificate pin สาธารณะ) Descriptor สร้างจาก APK จริงหลังตรวจ aapt/apksigner สำเร็จ ไม่ใช่ข้อมูลที่ผู้กด workflow ใส่เอง; SHA-256 เพียงอย่างเดียว **ไม่ใช่การยืนยันผู้เผยแพร่** การตรวจ pin ต้องยังตรงกับ signing certificate เดิม `79c26a1c9329aa69933eada6c5e13b7718d43ae1da90120de639fe23f10cc9d4` และ Android ยังเป็นผู้ตัดสินการติดตั้งทับ
+
+ก่อนมี release ที่เผยแพร่สำเร็จ API อาจตอบ 404: เป็นสถานะปกติของการยังไม่มีอัปเดต ไม่ใช่ข้อผิดพลาดของแอป ขั้นตอน bootstrap ครั้งแรกต้องติดตั้ง APK รุ่น 0.8 ที่ลงนามด้วย key เดิมด้วยตนเองก่อน แล้วจึงใช้ตัวอัปเดตในแอปสำหรับรุ่นถัดไป; release APK นี้ใช้ debug signing key **เดิม** ของเครื่อง ไม่ใช่ production signing key ใหม่ การเปิดเผย Firebase client config/API key ใน APK ยังหลีกเลี่ยงไม่ได้และต้องจำกัดสิทธิ์ key; ห้ามฝัง backend credential หรือ GitHub token ในแอป
 
 ## ตรวจเมื่อแก้เวอร์ชันแอปหรือ upload guard
 
 Version/package ใน `app/build.gradle.kts`, upload guard และชื่อ artifact ต้องตรงกัน ไม่ปิด guard หรือเปลี่ยน certificate pin เพื่อให้ผ่าน รันทวนด้วย:
 
 ```text
-node --test tools/test-android-apk-workflow.mjs tools/test-standalone-nortezh.mjs
+node --test tools/test-android-apk-workflow.mjs tools/test-android-update-release.mjs tools/test-standalone-nortezh.mjs
 ```
 
 APK verify job รัน regression นี้ก่อน compile และก่อน signed job เข้าถึง private setup ทดสอบใช้ Bash ของ guard จริงกับ SDK/APK **จำลอง** ตรวจทั้งรุ่นปัจจุบัน/รุ่นเก่า/package ผิด/signer ผิด/ไม่มีไฟล์/เครื่องมือล้มเหลว และชื่อ artifact ไม่มีการอ่าน private key หรือเซ็น APK จริง ผลทดสอบ local ไม่ใช่หลักฐานว่า manual signed build รอบใหม่ผ่านหรือมี APK ใหม่ให้ดาวน์โหลดแล้ว

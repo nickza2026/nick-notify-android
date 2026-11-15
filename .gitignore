@@ -1,4 +1,5 @@
 .gradle/
+.local-tools/
 .kotlin/
 **/build/
 local.properties

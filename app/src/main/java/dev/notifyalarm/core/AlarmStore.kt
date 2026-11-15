@@ -80,6 +80,11 @@ object AlarmStore {
 
     fun hasCritical(context: Context): Boolean = criticalActive(context).isNotEmpty()
 
+    /** Updater must fail closed if any saved incident is unreadable; never convert corruption to "no alarm". */
+    fun hasCriticalForUpdate(context: Context): Boolean = synchronized(lock) {
+        records(read(context)).any { it.importance == AlertImportance.CRITICAL }
+    }
+
     fun isAcknowledged(context: Context, id: String): Boolean = synchronized(lock) {
         // Cancelled incidents also suppress replay, but are not reported as a human acknowledgement.
         read(context).getJSONObject("terminal").optJSONObject(id)?.optString("type") == "acknowledged"
