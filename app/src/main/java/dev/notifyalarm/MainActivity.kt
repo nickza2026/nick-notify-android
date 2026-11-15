@@ -25,6 +25,7 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import androidx.core.content.FileProvider
 import com.google.firebase.FirebaseApp
 import com.google.firebase.messaging.FirebaseMessaging
 import dev.notifyalarm.core.AlarmEngine
@@ -35,7 +36,10 @@ import dev.notifyalarm.sync.ClientAccount
 import dev.notifyalarm.sync.ClientApi
 import dev.notifyalarm.sync.ClientPolicy
 import dev.notifyalarm.sync.ClientRegistration
+import dev.notifyalarm.updates.UpdateClient
+import dev.notifyalarm.updates.UpdateLifecycle
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicBoolean
 
 /** Local-first test screen. No server API key or Firebase credentials in source. */
 class MainActivity : Activity() {
@@ -50,6 +54,10 @@ class MainActivity : Activity() {
     private lateinit var userInput: EditText
     private lateinit var passwordInput: EditText
     private lateinit var deviceInput: EditText
+    private lateinit var updateMessage: TextView
+    private lateinit var updater: UpdateClient
+    private val updateBusy = AtomicBoolean(false)
+    private val updateLifecycle = UpdateLifecycle()
     private val handler = Handler(Looper.getMainLooper())
     private val refresh = object : Runnable {
         override fun run() { updateStatus(); handler.postDelayed(this, 1000) }
@@ -57,6 +65,7 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        updater = UpdateClient(applicationContext)
         val layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(32, 40, 32, 40)
@@ -126,6 +135,13 @@ class MainActivity : Activity() {
                 updateStatus()
             }
         }
+        text("อัปเดตแอป", 22f)
+        text("รุ่นปัจจุบัน ${packageManager.getPackageInfo(packageName, 0).versionName} (${updater.installedCode()})")
+        updateMessage = text("ตรวจรุ่นด้วยตนเองจาก GitHub สาธารณะ ไม่มีการใช้ token บัญชี")
+        button("ตรวจรุ่นอัปเดต") { updateTask { client, ticket -> client.check(ticket) } }
+        button("ดาวน์โหลดและตรวจสอบ APK") { updateTask { client, ticket -> client.download(ticket) } }
+        button("ติดตั้งรุ่นที่ตรวจแล้ว") { startUpdateInstall() }
+        text("Android จะขอสิทธิ์ติดตั้งจากแหล่งนี้และให้ยืนยันอีกครั้ง การติดตั้งอาจขัดจังหวะเสียงปลุก; แอปจะไม่เปิดตัวติดตั้งเองเมื่อกลับจาก Settings และไม่ยืนยันความสำเร็จจนเห็นรุ่นใหม่ หลังอนุญาตสิทธิ์ให้กดติดตั้งอีกครั้ง เหตุการณ์สำคัญที่เข้ามาระหว่างยืนยันในระบบอาจยังถูกขัดจังหวะได้")
         text("Remote API / FCM", 22f)
         val firebaseConfigured = FirebaseApp.getApps(this).any { it.name == FirebaseApp.DEFAULT_APP_NAME }
         remote = text(if (firebaseConfigured)
@@ -199,6 +215,13 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        updateLifecycle.resume()
+        if (updater.hasHandedOff()) {
+            val previous = updater
+            updater = UpdateClient(applicationContext)
+            updateMessage.text = "กลับจากตัวติดตั้งแล้ว หากยกเลิกหรือไม่สำเร็จ ให้ตรวจรุ่นและดาวน์โหลดใหม่ก่อนติดตั้งอีกครั้ง"
+            Thread { previous.dispose() }.start()
+        }
         try { AckSync.enqueue(this) } catch (_: Exception) { }
         try {
             ClientRegistration.periodic(this)
@@ -209,9 +232,81 @@ class MainActivity : Activity() {
         } catch (_: Exception) { }
         handler.post(refresh)
     }
-    override fun onPause() { handler.removeCallbacks(refresh); super.onPause() }
+    override fun onPause() {
+        updateLifecycle.pause()
+        updater.cancelWork()
+        handler.removeCallbacks(refresh)
+        super.onPause()
+    }
+
+    override fun onDestroy() {
+        updater.cancelWork()
+        Thread { updater.dispose() }.start()
+        super.onDestroy()
+    }
 
     private fun notificationsEnabled(): Boolean = AlarmEngine.notificationsReady(this)
+
+    private fun updateTask(action: (UpdateClient, Long) -> String) {
+        if (!updateBusy.compareAndSet(false, true)) return
+        val epoch = updateLifecycle.ticket()
+        val client = updater
+        val ticket = client.ticket()
+        updateMessage.text = "กำลังดำเนินการ…"
+        Thread {
+            val result = try { action(client, ticket) } catch (error: Exception) {
+                "อัปเดตไม่ได้: ${error.message ?: "ลองใหม่ภายหลัง"}"
+            }
+            updateBusy.set(false)
+            runOnUiThread {
+                if (!isFinishing && !isDestroyed && updater === client && updateLifecycle.accepts(epoch))
+                    updateMessage.text = result
+            }
+        }.start()
+    }
+
+    private fun startUpdateInstall() {
+        if (!updateBusy.compareAndSet(false, true)) return
+        val epoch = updateLifecycle.ticket()
+        val client = updater
+        val ticket = client.ticket()
+        updateMessage.text = "กำลังตรวจไฟล์อีกครั้ง…"
+        Thread {
+            val file = try { client.installable(ticket) } catch (error: Exception) {
+                runOnUiThread {
+                    if (!isFinishing && !isDestroyed && updater === client && updateLifecycle.accepts(epoch))
+                        updateMessage.text = error.message ?: "ตรวจไฟล์ไม่ได้"
+                    updateBusy.set(false)
+                }
+                return@Thread
+            }
+            runOnUiThread {
+                try {
+                    if (isFinishing || isDestroyed || updater !== client || !updateLifecycle.accepts(epoch))
+                        return@runOnUiThread
+                    // No automatic installer handoff after a Settings return; this is a fresh button action only.
+                    client.guard()
+                    if (Build.VERSION.SDK_INT >= 26 && !packageManager.canRequestPackageInstalls()) {
+                        updateMessage.text = "อนุญาตติดตั้งจากแหล่งนี้ใน Settings แล้วกลับมากดติดตั้งอีกครั้ง"
+                        openSettings(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                            Uri.parse("package:$packageName")))
+                        return@runOnUiThread
+                    }
+                    client.guard()
+                    val uri = FileProvider.getUriForFile(this, "$packageName.updates", file)
+                    val intent = Intent(Intent.ACTION_VIEW).apply {
+                        setDataAndType(uri, "application/vnd.android.package-archive")
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }
+                    startActivity(intent)
+                    client.markHandedOff()
+                    updateMessage.text = "ส่งต่อให้ Android แล้ว ยังไม่ทราบผลการติดตั้ง"
+                } catch (error: Exception) {
+                    updateMessage.text = "เปิดตัวติดตั้งไม่ได้: ${error.message ?: "ลองใหม่"}"
+                } finally { updateBusy.set(false) }
+            }
+        }.start()
+    }
 
     private fun requestNotifications() {
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {

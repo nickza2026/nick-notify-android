@@ -2,6 +2,8 @@ param([switch]$WithTests)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $originalJavaOpts = $env:JAVA_OPTS
+$originalJavaHome = $env:JAVA_HOME
+$originalAndroidHome = $env:ANDROID_HOME
 Push-Location $root
 try {
     # Thai Windows locale can select a Buddhist calendar (year 2569), outside ZIP's
@@ -12,8 +14,11 @@ try {
         if (Test-Path -LiteralPath $jbr) { $env:JAVA_HOME = $jbr }
     }
     if (-not $env:ANDROID_HOME) {
-        $sdk = Join-Path $env:LOCALAPPDATA 'Android\Sdk'
-        if (Test-Path -LiteralPath $sdk) { $env:ANDROID_HOME = $sdk }
+        $projectSdk = Join-Path $root '.local-tools\android-sdk'
+        $userSdk = Join-Path $env:LOCALAPPDATA 'Android\Sdk'
+        if (Test-Path -LiteralPath (Join-Path $projectSdk 'platforms\android-36\android.jar')) {
+            $env:ANDROID_HOME = $projectSdk
+        } elseif (Test-Path -LiteralPath $userSdk) { $env:ANDROID_HOME = $userSdk }
     }
     $tasks = @(':app:assembleDebug')
     if ($WithTests) { $tasks += @(':app:assembleDebugAndroidTest', ':app:testDebugUnitTest', ':app:lintDebug') }
@@ -24,4 +29,9 @@ try {
     Copy-Item -LiteralPath 'app\build\outputs\apk\debug\app-debug.apk' -Destination (Join-Path $out 'notify-alarm-poc-debug.apk') -Force
     Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $out 'notify-alarm-poc-debug.apk') | Format-List
     Write-Output 'Debug-signed PoC APK only. This is not a production release signing key.'
-} finally { $env:JAVA_OPTS = $originalJavaOpts; Pop-Location }
+} finally {
+    $env:JAVA_OPTS = $originalJavaOpts
+    $env:JAVA_HOME = $originalJavaHome
+    $env:ANDROID_HOME = $originalAndroidHome
+    Pop-Location
+}
