@@ -37,6 +37,7 @@ import dev.notifyalarm.sync.AckSync
 import dev.notifyalarm.sync.ClientAccount
 import dev.notifyalarm.sync.ClientApi
 import dev.notifyalarm.sync.ClientPolicy
+import dev.notifyalarm.sync.ClientOnboarding
 import dev.notifyalarm.sync.ClientRegistration
 import dev.notifyalarm.sync.GoogleAuthGateway
 import dev.notifyalarm.updates.UpdateClient
@@ -44,9 +45,18 @@ import dev.notifyalarm.updates.UpdateLifecycle
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.Executor
 
 /** Local-first test screen. No server API key or Firebase credentials in source. */
 class MainActivity : Activity() {
+    companion object {
+        internal var authLookup: (String) -> ClientApi.AuthConfig? = { ClientApi.authConfig(it) }
+        internal var authExecutor: Executor = Executor { Thread(it, "notify-auth-config").start() }
+        internal fun resetAuthDiscovery() {
+            authLookup = { ClientApi.authConfig(it) }
+            authExecutor = Executor { Thread(it, "notify-auth-config").start() }
+        }
+    }
     private lateinit var status: TextView
     private lateinit var active: TextView
     private lateinit var remote: TextView
@@ -61,6 +71,9 @@ class MainActivity : Activity() {
     private lateinit var googleLoginButton: Button
     private lateinit var passwordChangeButton: Button
     private lateinit var passwordRecoveryButton: Button
+    private lateinit var accountSettings: LinearLayout
+    private var authConfigLoading = false
+    private var resumedOnce = false
     private var authConfig: ClientApi.AuthConfig? = null
     private var authConfigBase: String? = null
     private val googleBusy = AtomicBoolean(false)
@@ -99,15 +112,15 @@ class MainActivity : Activity() {
                 insets
             }
         })
-        fun text(value: String, size: Float = 16f): TextView = TextView(this).apply {
+        fun text(value: String, size: Float = 16f, parent: LinearLayout = layout): TextView = TextView(this).apply {
             text = value; textSize = size; setTextColor(Color.rgb(25, 35, 50))
-            setPadding(0, 12, 0, 12); layout.addView(this)
+            setPadding(0, 12, 0, 12); parent.addView(this)
         }
-        fun button(label: String, action: () -> Unit) = Button(this).apply {
+        fun button(label: String, parent: LinearLayout = layout, action: () -> Unit) = Button(this).apply {
             text = label; isAllCaps = false; setOnClickListener { action() }
-            layout.addView(this, LinearLayout.LayoutParams(-1, -2).apply { topMargin = 12 })
+            parent.addView(this, LinearLayout.LayoutParams(-1, -2).apply { topMargin = 12 })
         }
-        text("Notify Alarm", 30f)
+        val title = text("Notify Alarm", 30f)
         text("Pixel 6 Pro · Android alarm PoC", 16f)
         text("เมื่อเริ่มทดสอบ เสียงจะวนจนกดรับทราบทั้งหมด ระวังระดับเสียงก่อนเริ่ม ไม่ใช่ระบบที่รับประกันการปลุกทุกสถานะ")
         status = text("กำลังตรวจสิทธิ์…")
@@ -142,10 +155,12 @@ class MainActivity : Activity() {
                     }.show()
             }
         }
-        button("รับทราบทั้งหมด / หยุดเสียง") {
+        val acknowledgeButton = button("รับทราบทั้งหมด / หยุดเสียง") {
             AlarmEngine.acknowledgeAll(this)
             updateStatus()
         }.apply { setTextColor(Color.rgb(150, 0, 0)); minimumHeight = 130 }
+        layout.removeView(acknowledgeButton)
+        layout.addView(acknowledgeButton, layout.indexOfChild(title) + 1)
         button("ลองเริ่มเสียงเหตุการณ์ค้างอีกครั้ง") {
             val pending = AlarmStore.criticalActive(this).firstOrNull()
             if (pending == null) {
@@ -168,12 +183,26 @@ class MainActivity : Activity() {
             "มี Firebase config ใน APK แล้ว — กดปุ่มด้านล่างเพื่อขอ FCM token ยังไม่ได้ยืนยันการรับ push จริง"
             else "ยังไม่ได้ตั้งค่า Firebase — ทดสอบเสียงในเครื่องได้ แต่ยังไม่พร้อมรับเหตุการณ์จาก server")
         button("ตรวจการตั้งค่า Firebase / คัดลอก token") { inspectFirebase() }
-        text("บัญชีและเครื่องที่รับแจ้งเตือน", 22f)
+        val accountPrimary = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        layout.addView(accountPrimary, layout.indexOfChild(acknowledgeButton) + 1)
+        text("บัญชี Google สำหรับรับแจ้งเตือน", 22f, accountPrimary)
+        googleLoginButton = button("Sign in with Google", accountPrimary) { googleLogin() }
+        accountStatus = text(ClientRegistration.status(this), parent = accountPrimary)
+        accountMessage = text("กำลังเตรียมการเข้าสู่ระบบ…", parent = accountPrimary)
+        button("ตรวจการเชื่อมต่ออีกครั้ง", accountPrimary) { refreshAuthConfig() }
+        button("ตั้งค่าขั้นสูง", accountPrimary) {
+            accountSettings.visibility = if (accountSettings.visibility == View.GONE) View.VISIBLE else View.GONE
+        }
+        accountSettings = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = View.GONE
+            accountPrimary.addView(this, LinearLayout.LayoutParams(-1, -2))
+        }
         fun input(hint: String, secret: Boolean = false) = EditText(this).apply {
             this.hint = hint
             if (secret) inputType = android.text.InputType.TYPE_CLASS_TEXT or
                 android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
-            layout.addView(this, LinearLayout.LayoutParams(-1, -2))
+            accountSettings.addView(this, LinearLayout.LayoutParams(-1, -2))
         }
         serverInput = input("HTTPS server URL เช่น https://example.com")
         serverInput.addTextChangedListener(object : TextWatcher {
@@ -183,6 +212,7 @@ class MainActivity : Activity() {
                 googleBusy.set(false)
                 authConfig = null
                 authConfigBase = null
+                authConfigLoading = false
                 if (::googleLoginButton.isInitialized) {
                     googleLoginButton.isEnabled = true
                     showAuthMode()
@@ -193,11 +223,7 @@ class MainActivity : Activity() {
         userInput = input("ชื่อผู้ใช้ (บัญชีเดียวกันทั้งสองเครื่อง)")
         passwordInput = input("รหัสผ่าน", true)
         deviceInput = input("ชื่อเครื่อง เช่น โทรศัพท์ของฉัน")
-        accountStatus = text(ClientRegistration.status(this))
-        accountMessage = text("เลือกตรวจวิธีเข้าสู่ระบบก่อนเข้าสู่ระบบ (ไม่กระทบเสียงปลุก)")
-        button("ตรวจวิธีเข้าสู่ระบบของ server") { refreshAuthConfig() }
-        passwordLoginButton = button("เข้าสู่ระบบและลงทะเบียนเครื่อง") { login() }
-        googleLoginButton = button("เข้าสู่ระบบด้วย Google และลงทะเบียนเครื่อง") { googleLogin() }
+        passwordLoginButton = button("เข้าสู่ระบบด้วยรหัสผ่านเดิม", accountSettings) { login() }
         button("ตรวจสอบ / ส่งลงทะเบียนอีกครั้ง") {
             requestFirebaseRegistration()
             accountTask { session ->
@@ -226,11 +252,13 @@ class MainActivity : Activity() {
                 }
             }
         }
-        passwordChangeButton = button("เปลี่ยนรหัสผ่าน") { changePassword() }
-        passwordRecoveryButton = button("ยืนยันออกจากระบบที่ค้างด้วยรหัสผ่านบัญชีเดิม") { recoverLogout() }
+        passwordChangeButton = button("เปลี่ยนรหัสผ่าน", accountSettings) { changePassword() }
+        passwordRecoveryButton = button("ยืนยันออกจากระบบที่ค้างด้วยรหัสผ่านบัญชีเดิม", accountSettings) { recoverLogout() }
         button("ออกจากระบบ (ไม่หยุดเสียงปลุกที่กำลังเล่น)") {
             invalidateGoogle()
             googleBusy.set(false)
+            authConfigLoading = false
+            showAuthMode()
             if (ClientAccount.session(this) == null) {
                 ClientAccount.cancelLogin(this)
                 accountMessage.text = "ยกเลิกการเข้าสู่ระบบที่ยังไม่เสร็จ"
@@ -249,11 +277,19 @@ class MainActivity : Activity() {
             updateStatus()
         }
         text("รับทราบหยุดเสียงทันทีโดยไม่รอเน็ต สำหรับเหตุการณ์ใหม่ที่ server แนบ HTTPS Ack route แอปจะจัดคิวส่งเมื่อระบบอนุญาต และแสดงแยกเมื่อ server ยืนยันแล้ว เหตุการณ์รุ่นเก่า/ทดสอบในเครื่องอาจไม่มีช่องทางส่งกลับ ไม่มี full-screen alarm หรือเริ่มเสียงอัตโนมัติหลัง reboot")
+        val existing = ClientAccount.session(this)
+        val remembered = ClientAccount.rememberedSetup(this)
+        serverInput.setText(ClientOnboarding.initialBase(existing?.base ?: remembered.first))
+        deviceInput.setText(ClientOnboarding.initialName(existing?.name ?: remembered.second, Build.MANUFACTURER, Build.MODEL))
+        userInput.setText(existing?.username ?: "")
         showAuthMode()
+        refreshAuthConfig()
     }
 
     override fun onResume() {
         super.onResume()
+        if (resumedOnce && !googleBusy.get() && !authConfigLoading) refreshAuthConfig()
+        resumedOnce = true
         updateLifecycle.resume()
         if (updater.hasHandedOff()) {
             val previous = updater
@@ -398,24 +434,27 @@ class MainActivity : Activity() {
         passwordLoginButton.visibility = if (mode == "password") View.VISIBLE else View.GONE
         passwordChangeButton.visibility = if (mode == "password") View.VISIBLE else View.GONE
         passwordRecoveryButton.visibility = if (mode == "password") View.VISIBLE else View.GONE
-        googleLoginButton.visibility = if (mode == "google") View.VISIBLE else View.GONE
+        googleLoginButton.visibility = View.VISIBLE
+        googleLoginButton.isEnabled = mode == "google" && !authConfigLoading && !googleBusy.get()
     }
 
     private fun refreshAuthConfig() {
+        if (googleBusy.get() || authConfigLoading) return
         val base = ClientPolicy.baseUrl(serverInput.text.toString()) ?: run {
             accountMessage.text = "กรุณากรอก HTTPS server URL ที่ถูกต้อง"; return
         }
         val epoch = invalidateGoogle()
         authConfig = null
         authConfigBase = null
+        authConfigLoading = true
         googleBusy.set(false)
-        googleLoginButton.isEnabled = true
         showAuthMode()
         accountMessage.text = "กำลังตรวจวิธีเข้าสู่ระบบ…"
-        Thread {
-            val result = try { ClientApi.authConfig(base) } catch (_: Exception) { null }
+        authExecutor.execute {
+            val result = try { authLookup(base) } catch (_: Exception) { null }
             runOnUiThread {
                 if (isFinishing || isDestroyed || authEpoch.get() != epoch) return@runOnUiThread
+                authConfigLoading = false
                 if (ClientPolicy.baseUrl(serverInput.text.toString()) != base) {
                     accountMessage.text = "URL เปลี่ยนแล้ว กรุณาตรวจใหม่"; return@runOnUiThread
                 }
@@ -423,12 +462,12 @@ class MainActivity : Activity() {
                 authConfigBase = if (result != null) base else null
                 showAuthMode()
                 accountMessage.text = when (result?.mode) {
-                    "password" -> "server ใช้รหัสผ่านเดิม"
-                    "google" -> "server ใช้ Google เท่านั้น กรุณาเตรียม Firebase config ของโครงการเดียวกัน"
-                    else -> "ตรวจวิธีเข้าสู่ระบบไม่ได้ / server ยังไม่พร้อม กรุณาอัปเดต server หรือลองใหม่"
+                    "password" -> "บริการยังไม่เปิด Google login — ไม่ต้องกรอกบัญชีหรือชื่อเครื่องใหม่ รอเปิด Google ที่บริการแล้วกดตรวจการเชื่อมต่ออีกครั้ง"
+                    "google" -> "พร้อมเข้าสู่ระบบด้วย Google · ชื่อเครื่องเตรียมให้อัตโนมัติ"
+                    else -> "ยังเชื่อมต่อบริการไม่ได้ ลองตรวจการเชื่อมต่ออีกครั้ง (ไม่กระทบเสียงปลุก)"
                 }
             }
-        }.start()
+        }
     }
 
     private fun googleLogin() {
@@ -525,7 +564,7 @@ class MainActivity : Activity() {
     private fun finishGoogle(epoch: Long, message: String) {
         if (isFinishing || isDestroyed || authEpoch.get() != epoch) return
         googleBusy.set(false)
-        googleLoginButton.isEnabled = true
+        showAuthMode()
         accountMessage.text = message
     }
 

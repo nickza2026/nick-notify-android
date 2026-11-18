@@ -5,8 +5,8 @@ import { readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:
 import { basename, dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-export const VERSION_CODE = 9;
-export const VERSION_NAME = '0.9.0-google-owner';
+export const VERSION_CODE = 10;
+export const VERSION_NAME = '0.9.1-google-setup';
 export const APK_ASSET = `notify-alarm-${VERSION_NAME}-debug.apk`;
 export const DESCRIPTOR_ASSET = 'notify-alarm-update.json';
 export const SIGNER = '79c26a1c9329aa69933eada6c5e13b7718d43ae1da90120de639fe23f10cc9d4';
@@ -30,7 +30,7 @@ export function descriptorFromApk(apk, aapt, apksigner, execute = inspect) {
   const before = hash();
   const badging = execute(aapt, ['dump', 'badging', apk]);
   const packageLine = badging.split(/\r?\n/).find(line => line.startsWith('package: '));
-  assert.match(packageLine ?? '', /^package: name='dev\.notifyalarm' versionCode='9' versionName='0\.9\.0-google-owner'(?: |$)/, 'unexpected APK package/version');
+  assert.match(packageLine ?? '', /^package: name='dev\.notifyalarm' versionCode='10' versionName='0\.9\.1-google-setup'(?: |$)/, 'unexpected APK package/version');
   const certificates = execute(apksigner, ['verify', '--print-certs', apk]);
   const digests = [...certificates.matchAll(/^Signer #\d+ certificate SHA-256 digest: ([0-9a-f]{64})$/gm)];
   assert.equal(digests.length, 1, 'expected exactly one APK signer');

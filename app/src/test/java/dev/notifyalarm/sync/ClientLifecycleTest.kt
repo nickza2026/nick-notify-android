@@ -6,6 +6,9 @@ import dev.notifyalarm.R
 import dev.notifyalarm.core.AlarmEngine
 import org.junit.Assert.*
 import org.junit.Test
+import org.junit.Before
+import org.junit.After
+import java.util.concurrent.Executor
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
@@ -17,6 +20,11 @@ import java.util.concurrent.atomic.AtomicInteger
 
 @RunWith(RobolectricTestRunner::class)
 class ClientLifecycleTest {
+    @Before fun fakePublicDiscovery() {
+        MainActivity.authLookup = { ClientApi.AuthConfig("password", null) }
+        MainActivity.authExecutor = Executor { it.run() }
+    }
+    @After fun restoreDiscovery() { MainActivity.resetAuthDiscovery() }
     @Test fun stalledNetworkDoesNotHoldUiStateLockAndCancelInvalidatesLogin() {
         val context: Context = RuntimeEnvironment.getApplication()
         val entered = CountDownLatch(1)
