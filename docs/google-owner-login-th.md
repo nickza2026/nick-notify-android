@@ -51,3 +51,15 @@ go build -o notify-admin.exe ./cmd/notify-admin
 ตัวอย่าง path เป็น placeholder ส่วนตัว ไม่ใช่ไฟล์จริงหรือคำสั่งที่ได้รันแล้ว. คำสั่ง revoke ลบเฉพาะ web/native local sessions ทั้งหมด; ไม่ลบ owner hash/binding, อุปกรณ์, ประวัติหรือ Ack และไม่ห้าม Google login ครั้งถัดไป. `reset-password` ของบัญชีที่ผูก Google **ไม่เปิด password login อีก**; ให้ใช้ `revoke-sessions` สำหรับการตัด session แทน. หากสงสัย account compromise ให้จัดการ Firebase account/provider และการอนุมัติ rollout แยก; การ revoke ไม่หยุด critical alarm ที่เริ่มทำงานหรือยกเลิก pending Ack.
 
 ขอบเขตที่ยืนยัน: local Go tests/vet/build, Android unit/build/lint, Web tests/typecheck/isolated production build และ browser กับ backend สังเคราะห์. วันที่ 18 พ.ย. 2026 Google จริงจาก Web ผ่าน Go verifier/local session และผู้ใช้ยืนยันเข้าถึง Dashboard โดยใช้ PostgreSQL แยกและไม่เปิด FCM sender. API/Web workflow ของ merge `2b5e0b96` ผ่าน deploy jobs; public API auth-config ตอบ `password`. APK `0.9.0` ผ่าน signed CI, ตรวจ public feed/descriptor/download hash และผู้ใช้รายงานอัปเดตสำเร็จแล้ว แต่ Google login บนมือถือ/บริการจริงและ FCM/Ack รอบใหม่ยัง **ไม่ได้ยืนยัน**. การแก้ onboarding `0.9.1` ต้องแยกหลักฐานจาก release `0.9.0` เดิม.
+
+## งานตั้งค่า runtime ที่กดรันแยก
+
+`Configure Google Runtime` ใน `.github/workflows/google-runtime.yaml` รับเฉพาะ manual dispatch บน `main` ใช้ environment `notify-web-production` หรือ `notify-api-production` และ identity `NTZ_SA_EMAIL`/`NTZ_SA_KEY` เดิม เป้าหมายคงเป็นสองบริการใน project/location เดิม ไม่สร้างหรือลบบริการ ไม่เชื่อมฐานข้อมูลโดยตรง ไม่ส่ง FCM และไม่เปลี่ยน trigger ของ API/Web CI หรือ APK
+
+เตรียม repository secrets ชื่อ `NOTIFY_FIREBASE_WEB_CONFIG_B64` เป็น base64 ของ JSON สี่ฟิลด์ `apiKey`, `authDomain`, `projectId`, `appId` และ `NOTIFY_FIREBASE_OWNER_CONFIG_B64` เป็น base64 ของ JSON `project_id`, `owner_uid` จากข้อมูลที่ operator ตรวจแล้ว ไม่ใช่ service-account key หรือ Firebase ID token ค่าจริงไม่อยู่ใน Git หรือ workflow log
+
+ลำดับ phase คือ `preflight` อ่าน deployment ของ Web อย่างเดียว, `configure-web` เพิ่มสี่ Web Firebase variables แล้วตรวจ public config, และ `activate-api` เพิ่มสาม API variables หลัง public Web config ตรงกันและ Firebase อนุญาต hostname ของเว็บนั้นแล้ว การตรวจ Authorized domains ใช้ public project-config API เดียวกับ Firebase JS SDK ไม่แก้รายการโดเมนแทน operator
+
+การเปลี่ยนค่าใช้ `deployment.deploy` และ `addEnv` ตาม contract ของ Nortezh action `v1.0.5` ส่ง image เดิมโดยไม่ส่ง `env`, `removeEnv`, keys เดิมหรือ mount data ตรวจ revision ก่อนเปลี่ยนและยืนยัน environment/คุณสมบัติอื่นหลังเปลี่ยน ไม่ retry mutation เมื่อผลไม่แน่นอนและไม่ rollback binding อัตโนมัติ ช่วงสลับไม่มี deployment ของบริการเดียวกันทำงานซ้อนกัน; read-before-write ไม่ใช่ provider-side compare-and-swap
+
+การเปิด Google ครั้งแรกยกเลิกเซสชัน Notify เดิม แต่คง owner/อุปกรณ์/ประวัติ/Ack การผ่าน workflow หรือ public config ยังไม่แทนการทดสอบ Sign in with Google จริงบนมือถือหรือเว็บ

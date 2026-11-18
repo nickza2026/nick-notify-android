@@ -1,0 +1,43 @@
+name: Configure Google Runtime
+
+on:
+  workflow_dispatch:
+    inputs:
+      phase:
+        description: Read-only preflight, prepare Web, or activate API (revokes old login sessions once)
+        type: choice
+        required: true
+        default: preflight
+        options:
+          - preflight
+          - configure-web
+          - activate-api
+
+permissions:
+  contents: read
+
+concurrency:
+  group: notify-google-runtime
+  cancel-in-progress: false
+
+jobs:
+  configure:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: ${{ inputs.phase == 'activate-api' && 'notify-api-production' || 'notify-web-production' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22.23.4
+      - name: Test preservation and failure guards without credentials
+        run: node --test tools/test-google-runtime.mjs
+      - name: Apply only the approved Google settings
+        env:
+          SA_AUTH_EMAIL: ${{ secrets.NTZ_SA_EMAIL }}
+          SA_AUTH_KEY: ${{ secrets.NTZ_SA_KEY }}
+          NOTIFY_FIREBASE_WEB_CONFIG_B64: ${{ secrets.NOTIFY_FIREBASE_WEB_CONFIG_B64 }}
+          NOTIFY_FIREBASE_OWNER_CONFIG_B64: ${{ secrets.NOTIFY_FIREBASE_OWNER_CONFIG_B64 }}
+          GOOGLE_PHASE: ${{ inputs.phase }}
+        run: node tools/google-runtime.mjs "$GOOGLE_PHASE"
