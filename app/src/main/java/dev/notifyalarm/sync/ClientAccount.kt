@@ -23,6 +23,12 @@ object ClientAccount {
 
     private fun prefs(context: Context) = context.applicationContext.getSharedPreferences(PREF, Context.MODE_PRIVATE)
 
+    /** A revoked/expired bearer is not a request to forget the chosen service or device label. */
+    fun rememberedSetup(context: Context): Pair<String?, String?> = synchronized(lock) {
+        val p = prefs(context)
+        p.getString("base", null) to p.getString("name", null)
+    }
+
     fun installation(context: Context): String = synchronized(lock) {
         val p = prefs(context)
         p.getString("installation", null)?.let { return@synchronized it }

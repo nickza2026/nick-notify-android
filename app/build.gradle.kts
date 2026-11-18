@@ -10,8 +10,8 @@ android {
         applicationId = "dev.notifyalarm"
         minSdk = 26
         targetSdk = 35
-        versionCode = 9
-        versionName = "0.9.0-google-owner"
+        versionCode = 10
+        versionName = "0.9.1-google-setup"
         testInstrumentationRunner = "dev.notifyalarm.AlarmInstrumentation"
     }
     signingConfigs {
