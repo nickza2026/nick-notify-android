@@ -7,18 +7,24 @@ const one = '11111111-1111-4111-8111-111111111111';
 const two = '22222222-2222-4222-8222-222222222222';
 const action = '33333333-3333-4333-8333-333333333333';
 const time = '2026-11-08T10:00:00Z';
-const device = { device_id: one, installation_id: two, device_name: 'เครื่องจำลอง ไม่มี FCM จริง', key_ids: ['primary'], active: true, created_at: time, updated_at: time };
+const device = { device_id: one, installation_id: two, device_name: 'เครื่องจำลอง ไม่มี FCM จริง', key_ids: ['primary'], active: true, silent: false, created_at: time, updated_at: time };
 const alert = { alert_id: 'synthetic-shared', title: 'ทดสอบ', message: 'จำลองเท่านั้น', status: 'provider_accepted', created_at: time, importance: 'critical', ack_count: 2, acknowledged_at: time, ack_actions: [] };
 
 test('device DTO drops FCM/session credentials and rejects malformed or duplicate identities', () => {
   const dto = parseDevices({ items: [{ ...device, fcm_token: 'PRIVATE_DEVICE_TOKEN', access_token: 'PRIVATE_SESSION', api_key: 'PRIVATE_KEY' }], secret: 'PRIVATE_KEY' });
   assert.deepEqual(dto, { items: [device] });
   assert.ok(!JSON.stringify(dto).includes('PRIVATE'));
-  for (const invalid of [{device_id:'bad'}, {installation_id:'bad'}, {device_name:''}, {device_name:'😀'.repeat(81)}, {active:'true'}, {created_at:null}, {key_ids:['primary','primary']}, {key_ids:['bad/key']}]) {
+  for (const invalid of [{device_id:'bad'}, {installation_id:'bad'}, {device_name:''}, {device_name:'😀'.repeat(81)}, {active:'true'}, {silent:'true'}, {silent:null}, {created_at:null}, {key_ids:['primary','primary']}, {key_ids:['bad/key']}]) {
     assert.throws(() => parseDevices({items:[{...device,...invalid}]}), /invalid_response/);
   }
   assert.throws(() => parseDevices({items:[device,device]}), /invalid_response/);
   assert.deepEqual(parseDevices({items:[]}), {items:[]});
+});
+
+test('device mute is explicit; servers that predate it read as audible', () => {
+  const { silent: _omitted, ...legacy } = device;
+  assert.equal(parseDevices({ items: [legacy] }).items[0].silent, false);
+  assert.equal(parseDevices({ items: [{ ...device, silent: true }] }).items[0].silent, true);
 });
 
 test('two phones using the same client_action_id remain separate Ack actions and safe delivery DTOs', () => {

@@ -41,7 +41,7 @@ export function backendURL(path: string) {
 }
 export function alertBody(value: unknown) {
   const v = value as Record<string, unknown>;
-  if (!v || Array.isArray(v) || typeof v !== 'object' || Object.keys(v).some(k => !['alert_id','title','message','ttl_seconds','importance'].includes(k)) || typeof v.alert_id !== 'string' || !/^[A-Za-z0-9_-]{1,100}$/.test(v.alert_id) || typeof v.title !== 'string' || !v.title.trim() || [...v.title].length > 120 || typeof v.message !== 'string' || !v.message.trim() || [...v.message].length > 2000 || !Number.isInteger(v.ttl_seconds) || (v.ttl_seconds as number) < 30 || (v.ttl_seconds as number) > 10800 || !['normal','critical'].includes(v.importance as string)) throw Error('invalid_schema');
+  if (!v || Array.isArray(v) || typeof v !== 'object' || Object.keys(v).some(k => !['alert_id','title','message','ttl_seconds','importance'].includes(k)) || typeof v.alert_id !== 'string' || !/^[A-Za-z0-9_-]{1,100}$/.test(v.alert_id) || typeof v.title !== 'string' || !v.title.trim() || [...v.title].length > 120 || typeof v.message !== 'string' || !v.message.trim() || [...v.message].length > 2000 || !Number.isInteger(v.ttl_seconds) || (v.ttl_seconds as number) < 30 || (v.ttl_seconds as number) > 10800 || !['normal','urgent','critical'].includes(v.importance as string)) throw Error('invalid_schema');
   return { alert_id: v.alert_id, title: v.title, message: v.message, ttl_seconds: v.ttl_seconds, importance: v.importance };
 }
 export async function boundedJSON(request:Request,max:number):Promise<unknown>{

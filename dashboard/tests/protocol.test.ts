@@ -63,8 +63,13 @@ test('importance is projected for history and detail without changing provider a
   assert.equal(detail.importance, 'normal');
   assert.equal(detail.ack_count, 2);
   assert.ok(!JSON.stringify(detail).includes('secret'));
+  const urgent = parseDetail({ ...base, importance: 'urgent', ack_actions: [] }, 'one');
+  assert.equal(urgent.importance, 'urgent');
+  assert.equal(importanceLabel(urgent.importance), 'ด่วน · เสียงตามเครื่อง');
+  assert.equal(urgent.ack_count, 2);
+  assert.equal(parseHistory({ items: [{ ...base, importance: 'urgent' }], next_cursor: null }).items[0].importance, 'urgent');
   assert.equal(parseDetail({ ...base, ack_actions: [] }, 'one').importance, 'critical');
-  for (const invalid of [null, 'urgent', '', 0, undefined]) {
+  for (const invalid of [null, 'loud', '', 0, undefined]) {
     assert.throws(() => parseHistory({ items: [{ ...base, importance: invalid }], next_cursor: null }), /invalid_response/);
     assert.throws(() => parseDetail({ ...base, importance: invalid, ack_actions: [] }, 'one'), /invalid_response/);
   }

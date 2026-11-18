@@ -20,8 +20,8 @@ export class IdempotencyStore {
       for (const [key, value] of data.entries) {
         if (typeof key !== 'string' || typeof value?.hash !== 'string' ||
             !Number.isFinite(value.createdAt) || !['sending', 'complete'].includes(value.phase) ||
-            (value.importance !== undefined && !['critical', 'normal'].includes(value.importance)) ||
-            (value.response?.importance !== undefined && !['critical', 'normal'].includes(value.response.importance)) ||
+            (value.importance !== undefined && !['critical', 'normal', 'urgent'].includes(value.importance)) ||
+            (value.response?.importance !== undefined && !['critical', 'normal', 'urgent'].includes(value.response.importance)) ||
             (value.response?.importance !== undefined &&
               (value.importance ?? 'critical') !== value.response.importance)) {
           throw new Error('invalid_store');
@@ -125,7 +125,7 @@ export class AckStore {
       for (const [id, value] of data.entries) {
         if (typeof id !== 'string' || !/^[A-Za-z0-9_-]{1,100}$/.test(id) ||
             typeof value?.tokenHash !== 'string' || !/^[a-f0-9]{64}$/.test(value.tokenHash) ||
-            (value.importance !== undefined && !['critical', 'normal'].includes(value.importance)) ||
+            (value.importance !== undefined && !['critical', 'normal', 'urgent'].includes(value.importance)) ||
             (value.acknowledgedAt !== undefined && typeof value.acknowledgedAt !== 'string') ||
             this.entries.has(id)) throw new Error();
         this.entries.set(id, value);
@@ -149,7 +149,7 @@ export class AckStore {
 
   reserve(id, tokenHash, importance = 'critical') {
     return this.locked(async () => {
-      if (!['critical', 'normal'].includes(importance)) throw new Error('invalid_importance');
+      if (!['critical', 'normal', 'urgent'].includes(importance)) throw new Error('invalid_importance');
       if (this.entries.has(id)) return false;
       if (this.entries.size >= this.maxRecords) throw new Error('ack_capacity');
       this.entries.set(id, { tokenHash, importance });
@@ -166,7 +166,7 @@ export class AckStore {
   setImportance(id, importance) {
     return this.locked(async () => {
       const entry = this.entries.get(id);
-      if (!entry || entry.importance !== undefined || !['critical', 'normal'].includes(importance)) {
+      if (!entry || entry.importance !== undefined || !['critical', 'normal', 'urgent'].includes(importance)) {
         throw new Error('ack_store_unavailable');
       }
       entry.importance = importance;

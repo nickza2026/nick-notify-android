@@ -492,3 +492,86 @@ func TestEnrollmentReadinessPreservesLegacyRoute(t *testing.T) {
 		t.Fatal("readiness failure dropped legacy sender")
 	}
 }
+
+func TestDashboardSilentDeviceReceivesOnlyNormalNotice(t *testing.T) {
+	db := testDB(t)
+	initial := "synthetic bootstrap password for silent device"
+	next := "synthetic replacement password for silent device"
+	if e := BootstrapDashboard(context.Background(), db, "admin", initial); e != nil {
+		t.Fatal(e)
+	}
+	s := &targetStub{failures: map[string]error{}}
+	a := testAPI(t, db, s)
+	a.RequestsPerMinute = 1000
+	access := ownerClient(t, a, uuid.NewString(), initial)
+	status, v := clientCall(t, a, "POST", "/change-password", access, fmt.Sprintf(`{"current_password":%q,"new_password":%q}`, initial, next))
+	mustStatus(t, status, 200)
+	access = v["access_token"].(string)
+	quiet := registerClient(t, a, access, "Quiet", "abcdefghijklmnopqrstuvwxyz0123456789")
+	loud := ownerClient(t, a, uuid.NewString(), next)
+	registerClient(t, a, loud, "Loud", "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
+	status, v, _ = dashCall(t, a, "POST", "/login", "", fmt.Sprintf(`{"username":"admin","password":%q}`, next), "")
+	mustStatus(t, status, 200)
+	dash := v["session_token"].(string)
+
+	for _, body := range []string{`{}`, `{"silent":null}`, `{"silent":"true"}`, `{"silent":true,"extra":1}`} {
+		status, v, _ = dashCall(t, a, "PATCH", "/devices/"+quiet, dash, body, "")
+		dashError(t, status, v, 400, "invalid_schema")
+	}
+	status, v, _ = dashCall(t, a, "PATCH", "/devices/"+uuid.NewString(), dash, `{"silent":true}`, "")
+	dashError(t, status, v, 404, "device_not_found")
+	status, v, _ = dashCall(t, a, "PATCH", "/devices/"+quiet, "", `{"silent":true}`, "")
+	dashError(t, status, v, 401, "session_required")
+	status, v, _ = dashCall(t, a, "PATCH", "/devices/"+quiet, dash, `{"silent":true}`, "")
+	mustStatus(t, status, 200)
+	if v["device_id"] != quiet || v["silent"] != true || v["active"] != true {
+		t.Fatal(v)
+	}
+	status, v, _ = dashCall(t, a, "GET", "/devices", dash, "", "")
+	mustStatus(t, status, 200)
+	silentByID := map[string]any{}
+	for _, item := range v["items"].([]any) {
+		d := item.(map[string]any)
+		silentByID[d["device_id"].(string)] = d["silent"]
+	}
+	if silentByID[quiet] != true || len(silentByID) != 2 {
+		t.Fatal(v)
+	}
+
+	byToken := func(from int) map[string]map[string]string {
+		out := map[string]map[string]string{}
+		for _, c := range s.calls()[from:] {
+			out[c.token] = c.data
+		}
+		return out
+	}
+	for i, level := range []string{"critical", "urgent", "normal"} {
+		id := "silent-" + level
+		status, _, _ = call(t, a, "POST", "/v1/alerts", testKey, id, fmt.Sprintf(`{"alert_id":%q,"title":"x","message":"x","importance":%q}`, id, level))
+		mustStatus(t, status, 202)
+		sent := byToken(i * 2)
+		muted, audible := sent["abcdefghijklmnopqrstuvwxyz0123456789"], sent["ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"]
+		if muted["type"] != "notice" || muted["importance"] != "normal" || muted["ack_token"] == "" || muted["ack_token"] == audible["ack_token"] {
+			t.Fatalf("%s reached silent device as %v", level, muted)
+		}
+		if audible["importance"] != level || (level == "critical") != (audible["type"] == "alert") {
+			t.Fatalf("%s changed for audible device: %v", level, audible)
+		}
+		status, v, _ = call(t, a, "GET", "/v1/alerts/"+id, testKey, "", "")
+		mustStatus(t, status, 200)
+		if v["importance"] != level {
+			t.Fatal("history must keep the requested importance", v)
+		}
+	}
+
+	status, v, _ = dashCall(t, a, "PATCH", "/devices/"+quiet, dash, `{"silent":false}`, "")
+	mustStatus(t, status, 200)
+	if v["silent"] != false {
+		t.Fatal(v)
+	}
+	status, _, _ = call(t, a, "POST", "/v1/alerts", testKey, "unmuted", `{"alert_id":"unmuted","title":"x","message":"x"}`)
+	mustStatus(t, status, 202)
+	if got := byToken(6)["abcdefghijklmnopqrstuvwxyz0123456789"]; got["type"] != "alert" || got["importance"] != "critical" {
+		t.Fatal("unmuted device did not regain critical", got)
+	}
+}

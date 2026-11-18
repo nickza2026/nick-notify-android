@@ -38,12 +38,12 @@ class AlertMessagingService : FirebaseMessagingService() {
                             if (AckSync.registerRoute(this, id, ackUrl, ackToken)) AckSync.enqueue(this)
                         } catch (_: Exception) { /* Still deliver; no network secrets in logs/status. */ }
                     }
-                    if (importance == AlertImportance.NORMAL) {
+                    if (importance != AlertImportance.CRITICAL) {
                         AlarmEngine.trigger(this, id, title, body, expiresAt, importance)
                         return
                     }
-                    if (AlarmStore.active(this).any { it.id == id && it.importance == AlertImportance.NORMAL }) {
-                        AlarmNotifications.showNormal(this, id)
+                    if (AlarmStore.active(this).any { it.id == id && it.importance != AlertImportance.CRITICAL }) {
+                        AlarmNotifications.showNotice(this, id)
                         return
                     }
                     if (message.priority != RemoteMessage.PRIORITY_HIGH) {
@@ -88,7 +88,11 @@ class AlertMessagingService : FirebaseMessagingService() {
         /** Notice is safe on legacy APKs (ignored), and cannot silently become a critical alert. */
         internal fun wireImportance(type: String?, value: String?): AlertImportance? = when (type) {
             "alert" -> AlertImportance.fromWire(value)
-            "notice" -> if (value == "normal") AlertImportance.NORMAL else null
+            "notice" -> when (value) {
+                "normal" -> AlertImportance.NORMAL
+                "urgent" -> AlertImportance.URGENT
+                else -> null
+            }
             else -> null
         }
     }

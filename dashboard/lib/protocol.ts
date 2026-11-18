@@ -15,10 +15,10 @@ export function localDashboardRequest(request: Request): boolean {
   } catch { return false; }
 }
 export type AlertStatus = string;
-export type Importance = 'normal' | 'critical';
+export type Importance = 'normal' | 'urgent' | 'critical';
 
 export function importanceLabel(importance: Importance): string {
-  return importance === 'normal' ? 'ธรรมดา · เงียบ' : 'วิกฤต · ปลุก';
+  return { normal: 'ธรรมดา · เงียบ', urgent: 'ด่วน · เสียงตามเครื่อง', critical: 'วิกฤต · ปลุก' }[importance];
 }
 
 export interface AlertSummary {
@@ -58,6 +58,7 @@ export interface RegisteredDevice {
   device_name: string;
   key_ids: string[];
   active: boolean;
+  silent: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -179,24 +180,31 @@ function deviceName(value: unknown): string {
   if (!name.trim() || [...name].length > 80) throw Error('invalid_response');
   return name;
 }
+export function parseDevice(value: unknown): RegisteredDevice {
+  const item = record(value);
+  const id = deviceId(item.device_id);
+  // Servers before per-device mute omitted the field; their devices were never muted.
+  const silent = Object.prototype.hasOwnProperty.call(item, 'silent') ? item.silent : false;
+  if (typeof item.active !== 'boolean' || typeof silent !== 'boolean' || !Array.isArray(item.key_ids) || item.key_ids.length > 100) throw Error('invalid_response');
+  const keys = item.key_ids.map((value) => {
+    const key = text(value, 100);
+    if (!/^[A-Za-z0-9_-]+$/.test(key)) throw Error('invalid_response');
+    return key;
+  });
+  const created = timestamp(item.created_at), updated = timestamp(item.updated_at);
+  if (!created || !updated || new Set(keys).size !== keys.length) throw Error('invalid_response');
+  return { device_id: id, installation_id: deviceId(item.installation_id), device_name: deviceName(item.device_name), key_ids: keys,
+    active: item.active, silent, created_at: created, updated_at: updated };
+}
 export function parseDevices(value: unknown): DevicesResponse {
   const data = record(value);
   if (!Array.isArray(data.items) || data.items.length > 1000) throw Error('invalid_response');
   const seen = new Set<string>();
   return { items: data.items.map((value) => {
-    const item = record(value);
-    const id = deviceId(item.device_id);
-    if (seen.has(id) || typeof item.active !== 'boolean' || !Array.isArray(item.key_ids) || item.key_ids.length > 100) throw Error('invalid_response');
-    seen.add(id);
-    const keys = item.key_ids.map((value) => {
-      const key = text(value, 100);
-      if (!/^[A-Za-z0-9_-]+$/.test(key)) throw Error('invalid_response');
-      return key;
-    });
-    const created = timestamp(item.created_at), updated = timestamp(item.updated_at);
-    if (!created || !updated || new Set(keys).size !== keys.length) throw Error('invalid_response');
-    return { device_id: id, installation_id: deviceId(item.installation_id), device_name: deviceName(item.device_name), key_ids: keys,
-      active: item.active, created_at: created, updated_at: updated };
+    const device = parseDevice(value);
+    if (seen.has(device.device_id)) throw Error('invalid_response');
+    seen.add(device.device_id);
+    return device;
   }) };
 }
 export function acknowledgementIdentity(action: Pick<AckAction, 'device_id' | 'client_action_id'>): string {
@@ -211,7 +219,7 @@ export function parseSummary(value: unknown): AlertSummary {
   // Older Go responses omitted importance and were always critical. An explicitly
   // supplied invalid value must not be silently presented as an alarm.
   const importance = Object.prototype.hasOwnProperty.call(item, 'importance') ? item.importance : 'critical';
-  if (importance !== 'normal' && importance !== 'critical') throw Error('invalid_response');
+  if (importance !== 'normal' && importance !== 'urgent' && importance !== 'critical') throw Error('invalid_response');
   return { alert_id: id, title: text(item.title), message: text(item.message),
     status: text(item.status, 80), importance, created_at: created, provider_accepted_at: timestamp(item.provider_accepted_at),
     expires_at: timestamp(item.expires_at), acknowledged_at: timestamp(item.acknowledged_at),

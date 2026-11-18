@@ -1,52 +1,76 @@
-# ระดับแจ้งเตือน: normal / critical
+# ระดับแจ้งเตือน: normal / urgent / critical
+
+ฉบับนี้อธิบาย API สามระดับและ APK `0.10.0-notification-levels` / versionCode `11` ซึ่งยังไม่เผยแพร่ ไม่มีการส่ง FCM หรือยืนยันเสียงบนเครื่องจริงจากผลทดสอบในเครื่อง
 
 ## Contract
 
-Service เรียก `POST /v1/alerts` ตาม [คู่มือ API](service-integration-th.md) พร้อม `importance` ได้สองค่า:
+`POST /v1/alerts` รับ `importance` ตามตาราง ส่วน request/response, authentication, errors และ retry อยู่ใน [API สำหรับระบบอื่น](service-integration-th.md)
 
-| ค่า | ผลที่ออกแบบบน Android รุ่นรองรับ |
+| ค่า | พฤติกรรม Android รุ่นรองรับ |
 |---|---|
-| `normal` | notification เงียบผ่าน channel แยก ไม่สั่น ไม่เริ่ม MediaPlayer/audio focus/foreground alarm service และไม่มี full-screen intent |
-| `critical` | เสียงปลุกต่อเนื่องตามพฤติกรรมเดิม ต้องกดรับทราบเองจึงหยุด |
-| ไม่ส่ง field | เท่ากับ `critical` เพื่อรักษา client/ข้อมูลเก่า |
-| null, ค่าว่าง, ค่าอื่น | API ปฏิเสธ ไม่เปลี่ยนเป็นวิกฤตหรือธรรมดาให้เอง |
+| `normal` | ข้อความเท่านั้น: notification เงียบ ไม่สั่น ไม่มี full-screen ไม่เรียก audio focus หรือ alarm foreground service |
+| `urgent` | notification เงียบ + เสียงครั้งเดียว (ไม่วน) ผ่าน**เสียงปลุก** (`USAGE_ALARM`) จึงดังแม้เครื่องอยู่โหมดเงียบ/สั่น ใช้ระดับเสียงปลุกที่ตั้งไว้ (ไม่ยกระดับให้) ไม่สั่น ไม่มี full-screen หรือ alarm foreground service |
+| `critical` | ใช้เสียงปลุกวนต่อเนื่องจนกดรับทราบบนเครื่อง ดังแม้โหมดเงียบ/สั่น ยกระดับเสียงปลุกขั้นต่ำ 80% เป็นค่าเริ่มต้น ภายใต้ข้อจำกัด DND ด้านล่าง |
+| ไม่ส่ง field | เท่ากับ `critical` เพื่อรักษาข้อมูลและ caller เดิม |
+| null, ค่าว่าง, ค่าอื่น | ปฏิเสธ ไม่แปลงเป็นระดับอื่นให้เอง |
 
-ระดับไม่ใช่ผลการส่ง: `provider_accepted` ยังไม่ยืนยันมือถือได้รับ/ดัง และ status เดิมไม่เปลี่ยนตามระดับหรือการกด Ack Dashboard แสดงระดับแยกในตาราง การ์ดมือถือ และรายละเอียด
+normal/urgent ไม่หยุด ลดเสียง หรือเริ่ม player ใหม่แทน critical ที่กำลังดัง ระดับแจ้งเตือนไม่ใช่ผลการส่ง `provider_accepted` ไม่ยืนยันว่ามือถือได้รับหรือมีเสียงจริง
 
-**normal ไม่ได้หมายถึง mute ทั้งโทรศัพท์:** ถ้ามี critical กำลังดัง เสียง critical ต้องดังต่อ normal ไม่หยุด/ลดเสียงนั้น การเปิดแอปหรือ retry/reconcile ของ normal ก็ต้องไม่สร้างเสียงใหม่เช่นกัน Notification/lock-screen appearance ยังขึ้นกับ permission และ settings ของ Android
+**ตั้งเครื่องเป็นเงียบจากหน้าเว็บ:** เจ้าของบัญชีตั้งรายเครื่องได้ที่หน้าอุปกรณ์ ([สัญญา FE](fe-device-silent-th.md)) เครื่องที่ตั้งเงียบได้รับ urgent/critical ใหม่เป็น `normal` (ข้อความเท่านั้น) เครื่องอื่นยังดังตามระดับ ประวัติยังเก็บระดับที่ส่งขอ
 
-## การเก็บและ retry
+urgent ที่เล่นจาก FCM ไม่มี foreground service และไม่ขอ audio focus: บน Android 15 ระบบอาจไม่ให้ audio focus แก่แอปเบื้องหลัง และ process อาจถูกปิดก่อนเสียงจบ — ยังไม่ได้ยืนยันบนเครื่องจริงว่าดังทุกครั้ง
 
-- PostgreSQL startup migration เพิ่มค่าเริ่มต้น critical ให้ประวัติเดิม ไม่เปลี่ยนข้อมูลเก่าให้เป็น normal และไม่ลบประวัติ
-- Node baseline อ่าน record เก่าที่ไม่มีระดับเป็น critical เช่นกัน ไม่ต้องย้ายข้อมูลย้อนหลังเพื่อเปลี่ยนค่า
-- key/body เดิมต้อง replay ผลเดิม การไม่ส่ง importance กับส่ง critical ชัดเจนต้องเข้ากันได้กับ idempotency เก่า การเปลี่ยนเป็น normal ด้วย key เดิมเป็น conflict
-- หนึ่ง UUID `client_action_id` ต่อ human Ack-all หนึ่งครั้ง ใช้ UUID เดิมข้าม alerts และ retries ไม่ว่าระดับใด การ swipe notification ไม่ใช่การรับทราบและไม่ใช่คำสั่งหยุด critical
-- TTL ใช้ป้องกันการเริ่ม alert เก่าที่เพิ่งได้รับ ไม่ใช่ timer หยุดเสียง critical ที่เริ่มแล้ว ตู้กลับ ON ไม่ใช่การกดของคน
+## TTL, การส่งซ้ำ และการรับทราบ
 
-## Transport กับระดับความสำคัญเป็นคนละเรื่อง
+- `ttl_seconds` เป็นเวลาล่าสุดที่ยังเริ่มแสดง/ปลุกเหตุการณ์ได้ ค่าเริ่มต้น 300 ช่วง 30–10800 วินาที ไม่ใช่เวลาหยุดเสียง critical ที่เริ่มแล้ว
+- urgent มีเสียงได้เฉพาะการแสดงครั้งแรก การส่งซ้ำ เปิดแอปใหม่ หรือ reconcile ไม่เล่นเสียงใหม่ ถ้าการโพสต์ครั้งแรกผิดพลาด การลองใหม่แสดงได้แบบเงียบโดยไม่เล่นเสียงซ้ำ
+- เหตุการณ์ที่ยังไม่เคยแสดงเมื่อหมด TTL ไม่เริ่มใหม่ การกลับ ON ของตู้ไม่ใช่การรับทราบและไม่หยุด critical
+- ทุกระดับมี Ack ได้ urgent ไม่จำเป็นต้องรอ Ack เพื่อหยุดเสียงครั้งเดียว การ swipe notification ไม่ใช่ Ack
+- Ack-all หนึ่งครั้งบนเครื่องเดียวใช้ `client_action_id` เดียวข้ามเหตุการณ์และ retries คนละเครื่องแยกการรับทราบ
+- คีย์และ body เดิม replay ผลเดิม ไม่ส่งใหม่ การไม่ส่ง importance กับ explicit critical ใช้ hash เดิม normal เดิมไม่เปลี่ยน ส่วน urgent มี hash ของตัวเอง เปลี่ยนระดับด้วยคีย์เดิมเป็น conflict
 
-Backend ส่ง normal ด้วย FCM delivery priority `NORMAL` และ critical ด้วย `HIGH` การส่งแบบ NORMAL อาจล่าช้าเมื่อ Doze/background ไม่มีสัญญาว่าจะทันที เมื่อหมด latest-start TTL ก่อนรับจึงอาจไม่แสดง
+## โหมดเงียบ, DND และระดับเสียงวิกฤต
 
-อย่าปรับ FCM priority เป็น NORMAL เพียงอย่างเดียวเพื่อหวังว่าจะทำให้ APK เก่าเงียบ APK ต้องมีเส้นทาง normal โดยตรง และห้ามส่ง normal เข้า critical-failure/recovery path เมื่อ transport ไม่ใช่ HIGH
+เสียงเรียกเข้า/notification กับเสียงปลุกเป็นคนละระดับ critical และ urgent ใช้ `USAGE_ALARM` จึงไม่อาศัยเสียงเรียกเข้า แต่เสียงปลุกเป็นศูนย์ (urgent), DND ที่ห้าม Alarms, audio focus หรือเส้นทางเสียง เช่น Bluetooth ยังทำให้ไม่ได้ยินได้
 
-Wire format ใน FCM data แยกด้วย: critical ใช้ `type=alert`, normal ใช้ `type=notice` พร้อม `importance=normal` เพื่อให้ APK เก่าที่รู้จักเฉพาะ alert **ข้าม notice** แทนเก็บเป็น alarm แล้วเผลอปลุกภายหลัง ดังนั้นเครื่องเก่าจะไม่แสดง normal จนกว่าจะอัปเดต APK ไม่ใช่การยืนยัน delivery บนเครื่องเก่า
+**ข้อจำกัด DND ที่ Android กำหนด (targetSdk 35):** แอปปิด DND ที่ผู้ใช้เปิดเองไม่ได้ — ตั้งแต่ Android 15 `setInterruptionFilter` สร้างกฎของแอปแทนการเปลี่ยน DND ทั้งเครื่อง ([behavior changes 15](https://developer.android.com/about/versions/15/behavior-changes-15)) และไม่มี API ให้เสียงปลุกดังเมื่อ DND ห้าม Alarms หรือ Total silence สิ่งที่แอปทำ:
 
-## การตรวจรับบน Pixel (ต้องทดสอบจริงภายหลัง)
+- ขอสิทธิ์ `ACCESS_NOTIFICATION_POLICY` (ผู้ใช้กดอนุญาตเองจากปุ่ม "อนุญาตสิทธิ์ Do Not Disturb" ซึ่งเปิด `ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS`) เพื่อให้การยกระดับเสียงปลุกขณะ DND ไม่ถูกปฏิเสธ
+- channel `alarm_playback_v1` ขอ `setBypassDnd(true)` — มีผลเฉพาะ channel ที่สร้างใหม่และเฉพาะโหมด DND Priority ([NotificationChannel](https://developer.android.com/reference/android/app/NotificationChannel#setBypassDnd(boolean))) ไม่ได้ทำให้เสียงปลุกที่ถูกห้ามดังได้
+- หน้าแอปแสดงสถานะสิทธิ์ และเตือนเมื่ออ่านได้ว่า DND กำลังห้าม Alarms
 
-APK ที่รวม importance และตัวแก้ความปลอดภัยล่าสุดคือ **0.6.0-safety-poc / versionCode 6** ที่ `artifacts/notify-alarm-0.6.0-safety-debug.apk` ตรวจ signature แล้วตรงกับ APK 0.5.0 เดิม ให้ติดตั้งทับแอปเดิมก่อน ไม่ต้องล้างข้อมูล/ถอนติดตั้งซึ่งอาจทำให้ tombstones และ pending Ack หาย APK 0.5.0 ยังมีสองระดับ แต่ยังมีทางให้ terminal จาก server ปิด critical ได้
+DND ค่าเริ่มต้นของ Android ส่วนใหญ่อนุญาต Alarms จึงยังดังได้ — ต้องยืนยันบนเครื่องจริง การกลับจาก Settings รีเฟรชสถานะเท่านั้น ไม่เริ่มเสียงเอง
 
-ผล local/synthetic ก่อนหน้านี้: Go/PostgreSQL 17 เคส + vet, Node 33 เคส, dashboard unit 6 เคส/typecheck/build และ browser desktop/mobile/detail ทั้งสองระดับผ่าน รอบแก้ความปลอดภัย 26 ต.ค. รัน Android JVM **14 เคส** พร้อม assemble debug/test APK และ lint ผ่านแบบ offline; ไม่ได้รัน Go/Node/dashboard ซ้ำ ผลเหล่านี้ยังไม่ยืนยันส่งถึง Pixel
+ตัวเลือก **ระดับเสียงขั้นต่ำชั่วคราวขณะวิกฤต** เริ่มต้น**เปิด 80%** ผู้ใช้ปิดหรือเลือกระดับ 1–100% เองได้ในแอป เมื่อ critical เริ่มเล่นจริงจึงยกระดับเสียงปลุกทั้งเครื่องถ้าต่ำกว่าที่เลือก ไม่ลดระดับที่สูงอยู่แล้ว ไม่เปลี่ยนเสียงของ normal/urgent ค่าที่ผู้ใช้เคยบันทึกไว้ในรุ่นก่อนยังใช้ค่าเดิม
 
-การผ่าน Go/Node/JVM/browser tests ไม่เท่ากับยืนยันเครื่องจริง ต้องติดตั้ง APK รุ่นใหม่และตรวจด้วยข้อมูลสังเคราะห์ที่ตั้งใจส่ง:
+เก็บระดับเดิมก่อนปรับเพียงครั้งเดียวในช่วงที่มี critical ซ้อนกัน หลัง Ack ตัวสุดท้าย/หยุด service/เล่นผิดพลาดจึงพยายามคืนระดับเดิม เฉพาะเมื่อยังเป็นค่าที่แอปปรับและไม่เคยตรวจพบการเปลี่ยนโดยผู้ใช้ แอปไม่ดันระดับกลับขึ้นซ้ำเมื่อผู้ใช้ลดเอง
 
-1. ส่ง normal เมื่อไม่มี alarm: มี notification/ข้อความ ไม่มีเสียง สั่น หน้าปลุก หรือ FGS alarm จากรายการนี้
-2. เปิดแอปหลังรับ normal และเปิดใหม่หลัง process ถูกสร้างใหม่: ไม่เริ่มเสียงเพราะ normal ที่ค้างอยู่
-3. ส่ง critical: เสียงดังต่อเนื่องจนกดรับทราบ ตรวจด้วยความยินยอมและสภาพแวดล้อมที่พร้อมรับเสียง
-4. ส่ง normal ระหว่าง critical: critical ดังต่อ normal ไม่เริ่ม player ใหม่และใช้ notification แยก
-5. รับทราบ/ยุติ critical ตัวสุดท้ายขณะมี normal ค้าง: เสียง/FGS หยุด normal ไม่แปลงเป็น alarm
-6. ทดสอบ Ack ตอน offline แล้วต่ออินเทอร์เน็ต: ไม่มีเสียงกลับมา และ retries ไม่เพิ่มจำนวนการกด
-7. ทดสอบ missing importance เป็น critical และ normal ที่ล่าช้า/ซ้ำ/หมด TTL ไม่หลุดไปปลุก
-8. ขณะ critical ค้าง รับ FCM `cancelled`/`acknowledged` ทั้งก่อนและหลัง alert: critical ไม่หาย ไม่สร้าง human Ack และกดรับทราบบนเครื่องเท่านั้นจึงหยุด; normal ที่แสดงอยู่ยังปิดได้ด้วย remote terminal
-9. ขัดจังหวะเสียงด้วยสายโทรศัพท์/แอปอื่น: มีสถานะแจ้งว่าเสียงไม่ทำงานและลองขอ audio focus ใหม่ภายใน 5–30 วินาทีขณะ service ยังอยู่; หาก service หยุดโดยมี `onDestroy` จะคงเหตุการณ์และแสดง failure notification แต่ process kill อาจไม่เรียก callback หรือไม่แสดง notification ใหม่ ต้องเปิดแอปกดเริ่มใหม่ ไม่อ้างว่า OS จะปล่อยเสียงให้ทำงานทุกครั้ง
+การคืนเสียงเป็น best effort: force-stop/process kill อาจไม่เรียก cleanup เมื่อเปิดแอปครั้งถัดไปจะพยายามคืนค่าที่ค้างไว้โดยไม่เริ่มเสียง หากตรวจพบว่าผู้ใช้เปลี่ยนระดับแล้วจะไม่เขียนทับ ไม่มีการรับประกัน restoration แบบ atomic กับการเปลี่ยนเสียงจาก Settings/แอปอื่น
 
-ยังไม่ส่ง FCM หรือเล่นเสียงบน Pixel อัตโนมัติจากการทดสอบใน repository และยังไม่อ้างว่า Pixel Ack→Go/PostgreSQL ผ่านจนกว่าจะมี HTTPS URL และตรวจจริง
+## Transport และความเข้ากันได้
+
+normal ใช้ FCM `NORMAL` ส่วน urgent/critical ใช้ `HIGH` ระดับ transport ไม่ได้สั่งให้ Android ทะลุ mute หรือ DND การส่งล่าช้า, effective priority ถูกลด, network, permissions, battery/OS หรือแอปถูก force-stop ยังมีผลต่อการรับและเริ่มเสียง เครื่องปิดรับแจ้งเตือนไม่ได้
+
+critical ใช้ FCM data `type=alert`; normal/urgent ใช้ `type=notice` กับ importance ตามจริง APK ที่ไม่รู้จักระดับ notice นั้นข้ามแทนแปลงเป็นวิกฤต urgent จึงต้องอัปเดต APK ก่อนรับ ไม่ใช่เปลี่ยน API แล้วถือว่า APK เก่ารองรับทันที
+
+API อ่านข้อมูลเก่าที่ไม่มี importance เป็น critical ไม่เปลี่ยนประวัติ/คีย์/การรับทราบเดิม ขยาย constraint ด้วย migration ใหม่ 005 โดยไม่แก้ SQL ที่เผยแพร่แล้ว
+
+## การตรวจรับบนเครื่องจริงภายหลัง
+
+ทดสอบด้วยเหตุการณ์สังเคราะห์เมื่อเจ้าของมือถือพร้อมรับเสียง และใช้ APK signer เดิมเพื่อติดตั้งทับโดยไม่ล้างข้อมูล:
+
+1. normal ไม่มีเสียง/สั่น; urgent ดังครั้งเดียวทั้งโหมดปกติ/สั่น/เงียบ (ทั้งตอนแอปเปิดอยู่และอยู่เบื้องหลัง/จอล็อก) และเงียบเมื่อ DND ห้าม Alarms
+1. ตั้งเครื่องหนึ่งเป็นเงียบจากหน้าเว็บ แล้วส่ง urgent/critical: เครื่องนั้นแสดงข้อความเท่านั้น อีกเครื่องดังตามระดับ
+2. ส่ง urgent ซ้ำหลัง dismiss/เปิดแอปใหม่ไม่ดังซ้ำ การหมด TTL ก่อนแสดงไม่ปลุกย้อนหลัง
+3. critical ดังวนจน Ack; normal/urgent/TTL หลังเริ่ม/remote terminal ไม่หยุดเสียงวิกฤต
+4. ลองเสียงเรียกเข้าปกติ/เงียบ, ระดับเสียงปลุกศูนย์/ไม่ศูนย์, DND ปิด/อนุญาต Alarms/ห้าม Alarms, Bluetooth และ audio focus interruption บันทึกเสียงที่ได้ยินจริง ไม่ใช้เพียง player state เป็นหลักฐาน
+5. ตัวเลือกขั้นต่ำปิดไม่แก้ระดับเสียง; เมื่อเปิด ตรวจการยก/คืนระดับ, critical ซ้อนกัน, ปรับเสียงเอง และกลับจาก Settings โดยไม่มีเสียงเริ่มใหม่
+6. Ack ตอน offline หยุดเสียงได้ ต่ออินเทอร์เน็ตแล้ว sync ด้วย action เดิม ไม่เพิ่มจำนวนเพราะ retry ตรวจผลรายเครื่องและประวัติ server แยกจากเสียงที่ได้ยิน
+
+การทดสอบ JVM/Go/PostgreSQL/Node/Web แบบจำลองและ browser loopback ไม่ใช่ผลทดสอบเสียงจริงหรือ Pixel→API Ack จริง
+
+## ข้อกำหนด Android อ้างอิง
+
+- [AudioManager: ระดับเสียงและข้อจำกัดการปรับ](https://developer.android.com/reference/android/media/AudioManager)
+- [NotificationManager: DND policy และพฤติกรรม target Android 15 ขึ้นไป](https://developer.android.com/reference/android/app/NotificationManager)
+- [NotificationChannel: การตั้งค่าเสียงและ DND ของ channel](https://developer.android.com/reference/android/app/NotificationChannel)

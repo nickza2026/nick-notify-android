@@ -215,8 +215,20 @@ func (a *API) dashboard(w http.ResponseWriter, r *http.Request) error {
 	devices := r.Method == "GET" && path == "/devices"
 	revokeID := strings.TrimPrefix(path, "/devices/")
 	revoke := r.Method == "DELETE" && strings.HasPrefix(path, "/devices/") && canonicalUUID(revokeID)
-	if !login && !change && !logout && !session && !getAlert && !history && !stats && !create && !devices && !revoke {
+	silence := r.Method == "PATCH" && strings.HasPrefix(path, "/devices/") && canonicalUUID(revokeID)
+	if !login && !change && !logout && !session && !getAlert && !history && !stats && !create && !devices && !revoke && !silence {
 		return fail(404, "not_found")
+	}
+	var setting struct {
+		Silent *bool `json:"silent"`
+	}
+	if silence {
+		if e := dashboardDecode(r, &setting); e != nil {
+			return e
+		}
+		if setting.Silent == nil {
+			return fail(400, "invalid_schema")
+		}
 	}
 	var credentials struct {
 		Username *string `json:"username"`
@@ -418,6 +430,16 @@ func (a *API) dashboard(w http.ResponseWriter, r *http.Request) error {
 			return e
 		}
 		respond(w, 200, map[string]bool{"revoked": true})
+		return nil
+	case silence:
+		item, e := a.setDeviceSilent(r.Context(), revokeID, *setting.Silent)
+		if e == sql.ErrNoRows {
+			return fail(404, "device_not_found")
+		}
+		if e != nil {
+			return e
+		}
+		respond(w, 200, item)
 		return nil
 	}
 	return fail(404, "not_found")

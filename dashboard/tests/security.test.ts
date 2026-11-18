@@ -37,10 +37,11 @@ test('backend paths fixed and operator internal HTTP origins exact',()=>{
   for(const value of ['http://*.example','http://backend:8791/path','http://user:pass@backend:8791']){process.env.BACKEND_ALLOWED_HTTP_ORIGINS=value;assert.throws(()=>backendURL('/v1/dashboard/history'));}
   delete process.env.BACKEND_ALLOWED_HTTP_ORIGINS;delete process.env.BACKEND_URL;
 });
-test('test-alert allowlist requires explicit normal/critical and bounded Unicode/TTL',()=>{
+test('test-alert allowlist requires explicit normal/urgent/critical and bounded Unicode/TTL',()=>{
   const body={alert_id:'synthetic-one',title:'ทดสอบ',message:'ข้อความ',ttl_seconds:300,importance:'normal'};
   assert.deepEqual(alertBody(body),body);assert.equal(alertBody({...body,importance:'critical'}).importance,'critical');
-  for(const extra of [{importance:undefined},{importance:'urgent'},{ttl_seconds:29},{ttl_seconds:10801},{ttl_seconds:30.5},{title:'😀'.repeat(121)},{message:'ก'.repeat(2001)},{fcm_token:'forbidden'},{url:'http://evil'}])assert.throws(()=>alertBody({...body,...extra}));
+  assert.equal(alertBody({...body,importance:'urgent'}).importance,'urgent');
+  for(const extra of [{importance:undefined},{importance:'loud'},{importance:null},{ttl_seconds:29},{ttl_seconds:10801},{ttl_seconds:30.5},{title:'😀'.repeat(121)},{message:'ก'.repeat(2001)},{fcm_token:'forbidden'},{url:'http://evil'}])assert.throws(()=>alertBody({...body,...extra}));
   assert.equal(alertBody({...body,title:'😀'.repeat(120)}).title.length,240);
 });
 test('request reader bounds chunked payload independent of content-length',async()=>{

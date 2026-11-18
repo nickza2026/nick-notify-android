@@ -29,7 +29,7 @@ function Time({ value, compact = false }: { value: string | null | undefined; co
 }
 
 function ImportanceBadge({ importance }: { importance: Importance }) {
-  return <Tag color={importance === 'critical' ? 'error' : 'default'}>{importanceLabel(importance)}</Tag>;
+  return <Tag color={importance === 'critical' ? 'error' : importance === 'urgent' ? 'warning' : 'default'}>{importanceLabel(importance)}</Tag>;
 }
 
 function Summary({ stats, state, error }: { stats: StatsResponse | null; state: LoadState; error: string }) {

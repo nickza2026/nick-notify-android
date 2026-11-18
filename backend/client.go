@@ -27,12 +27,13 @@ type deviceItem struct {
 	Name         string    `json:"device_name"`
 	KeyIDs       []string  `json:"key_ids"`
 	Active       bool      `json:"active"`
+	Silent       bool      `json:"silent"`
 	Created      time.Time `json:"created_at"`
 	Updated      time.Time `json:"updated_at"`
 }
 
 func (a *API) devices(ctx context.Context) ([]deviceItem, error) {
-	rows, e := a.DB.QueryContext(ctx, `SELECT d.id::text,d.installation_id::text,d.device_name,d.active,d.created_at,d.updated_at FROM client_devices d WHERE d.owner_id=1 ORDER BY d.created_at,d.id`)
+	rows, e := a.DB.QueryContext(ctx, `SELECT d.id::text,d.installation_id::text,d.device_name,d.active,d.silent,d.created_at,d.updated_at FROM client_devices d WHERE d.owner_id=1 ORDER BY d.created_at,d.id`)
 	if e != nil {
 		return nil, e
 	}
@@ -40,7 +41,7 @@ func (a *API) devices(ctx context.Context) ([]deviceItem, error) {
 	items := []deviceItem{}
 	for rows.Next() {
 		var d deviceItem
-		if e = rows.Scan(&d.ID, &d.Installation, &d.Name, &d.Active, &d.Created, &d.Updated); e != nil {
+		if e = rows.Scan(&d.ID, &d.Installation, &d.Name, &d.Active, &d.Silent, &d.Created, &d.Updated); e != nil {
 			return nil, e
 		}
 		d.KeyIDs = []string{"primary"}
@@ -49,6 +50,15 @@ func (a *API) devices(ctx context.Context) ([]deviceItem, error) {
 		items = append(items, d)
 	}
 	return items, rows.Err()
+}
+
+// The mute applies to alerts reserved after commit; sounds already started on a phone are unaffected.
+func (a *API) setDeviceSilent(ctx context.Context, id string, silent bool) (deviceItem, error) {
+	d := deviceItem{KeyIDs: []string{"primary"}}
+	e := a.DB.QueryRowContext(ctx, `UPDATE client_devices SET silent=$2 WHERE owner_id=1 AND id=$1 RETURNING id::text,installation_id::text,device_name,active,silent,created_at,updated_at`, id, silent).Scan(&d.ID, &d.Installation, &d.Name, &d.Active, &d.Silent, &d.Created, &d.Updated)
+	d.Created = d.Created.UTC()
+	d.Updated = d.Updated.UTC()
+	return d, e
 }
 
 func (a *API) revokeDevice(ctx context.Context, id string, installation bool) error {

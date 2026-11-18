@@ -559,7 +559,7 @@ func TestPostgresImportanceContract(t *testing.T) {
 	}
 	code, _, _ = call(t, a, "POST", "/v1/alerts", testKey, "mode-key", `{"alert_id":"mode","title":"test","message":"synthetic","importance":"normal"}`)
 	mustStatus(t, code, 409)
-	for _, value := range []string{`null`, `"urgent"`, `5`, `""`} {
+	for _, value := range []string{`null`, `"unknown"`, `5`, `""`} {
 		code, _, _ = call(t, a, "POST", "/v1/alerts", testKey, uuid.NewString(), fmt.Sprintf(`{"title":"test","message":"synthetic","importance":%s}`, value))
 		if code != 400 && code != 422 {
 			t.Fatalf("invalid importance %s accepted: %d", value, code)
@@ -575,10 +575,65 @@ func TestPostgresImportanceContract(t *testing.T) {
 	if detail["importance"] != "normal" {
 		t.Fatal("detail missing mode")
 	}
+	// Recreate the exact pre-005 constraint with existing normal/critical records.
+	if _, err := db.Exec(`ALTER TABLE alerts DROP CONSTRAINT alerts_importance_check; ALTER TABLE alerts ADD CONSTRAINT alerts_importance_check CHECK (importance IN ('normal','critical'))`); err != nil {
+		t.Fatal(err)
+	}
+	var criticalHash, normalHash string
+	if err := db.QueryRow(`SELECT encode(body_hash,'hex') FROM alerts WHERE id='mode'`).Scan(&criticalHash); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT encode(body_hash,'hex') FROM alerts WHERE id='quiet'`).Scan(&normalHash); err != nil {
+		t.Fatal(err)
+	}
+	if criticalHash != fmt.Sprintf("%x", digest(`{"alert_id":"mode","title":"test","message":"synthetic","ttl_seconds":300}`)) || normalHash != fmt.Sprintf("%x", digest(`{"alert_id":"quiet","title":"test","message":"synthetic","ttl_seconds":300,"importance":"normal"}`)) {
+		t.Fatal("legacy critical or normal canonical hash changed")
+	}
+	for i := 0; i < 2; i++ {
+		if err := Migrate(context.Background(), db); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for id, before := range map[string]string{"mode": criticalHash, "quiet": normalHash} {
+		var after string
+		if err := db.QueryRow(`SELECT encode(body_hash,'hex') FROM alerts WHERE id=$1`, id).Scan(&after); err != nil || after != before {
+			t.Fatal("migration changed canonical hash", err)
+		}
+	}
+	urgent := `{"alert_id":"urgent","title":"test","message":"synthetic","importance":"urgent"}`
+	code, receipt, _ := call(t, a, "POST", "/v1/alerts", testKey, "urgent-key", urgent)
+	mustStatus(t, code, 202)
+	if receipt["importance"] != "urgent" || s.data["importance"] != "urgent" || s.data["type"] != "notice" {
+		t.Fatal("urgent delivery data incorrect")
+	}
+	var urgentHash string
+	if err := db.QueryRow(`SELECT encode(body_hash,'hex') FROM alerts WHERE id='urgent'`).Scan(&urgentHash); err != nil || urgentHash != fmt.Sprintf("%x", digest(`{"alert_id":"urgent","title":"test","message":"synthetic","ttl_seconds":300,"importance":"urgent"}`)) {
+		t.Fatal("urgent canonical hash incorrect", err)
+	}
+	if err := Migrate(context.Background(), db); err != nil {
+		t.Fatal("rerun with urgent rows failed", err)
+	}
+	a.Now = func() time.Time { return time.Now().Add(24 * time.Hour) }
+	code, _, _ = call(t, a, "POST", "/v1/alerts/urgent/ack", s.token(), "", `{}`)
+	mustStatus(t, code, 200)
+	code, receipt, headers = call(t, a, "POST", "/v1/alerts", testKey, "urgent-key", urgent)
+	mustStatus(t, code, 202)
+	if headers.Get("Idempotency-Replayed") != "true" || receipt["importance"] != "urgent" || s.calls.Load() != 3 {
+		t.Fatal("urgent replay incorrect")
+	}
+	for _, mode := range []string{"normal", "critical"} {
+		code, _, _ = call(t, a, "POST", "/v1/alerts", testKey, "urgent-key", strings.ReplaceAll(urgent, `"importance":"urgent"`, `"importance":"`+mode+`"`))
+		mustStatus(t, code, 409)
+	}
+	code, detail, _ = call(t, a, "GET", "/v1/alerts/urgent", testKey, "", "")
+	mustStatus(t, code, 200)
+	if detail["importance"] != "urgent" {
+		t.Fatal("urgent detail missing mode")
+	}
 	code, page, _ := call(t, a, "GET", "/v1/history", testKey, "", "")
 	mustStatus(t, code, 200)
 	items := page["items"].([]any)
-	if len(items) != 2 || items[0].(map[string]any)["importance"] == nil || items[1].(map[string]any)["importance"] == nil {
+	if len(items) != 3 || items[0].(map[string]any)["importance"] == nil || items[1].(map[string]any)["importance"] == nil {
 		t.Fatal("history missing mode")
 	}
 }

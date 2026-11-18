@@ -1,7 +1,7 @@
 import 'server-only';
 import { readFile } from 'node:fs/promises';
 import { NextResponse } from 'next/server';
-import { parseHistory, parseStats, parseDetail, parseDevices, validDeviceId, validUtc } from './protocol';
+import { parseHistory, parseStats, parseDetail, parseDevice, parseDevices, validDeviceId, validUtc } from './protocol';
 import { authDTO, backendURL, boundedJSON, publicConfig, sessionToken, tokenPattern, trustedRequest } from './security';
 import {backendAuthConfig,firebaseWebConfig,googleLoginBody} from './google-contract';
 
@@ -102,18 +102,31 @@ export async function upstream(request: Request,path: '/v1/dashboard/history'|'/
   } catch(e){return failure(e instanceof Error && e.message==='server_configuration'?'server_configuration':'upstream_error',e instanceof Error && e.message==='server_configuration'?503:502);}
 }
 export async function devicesRoute(request: Request, id?: string) {
-  const deleting = request.method === 'DELETE';
-  const rejected = guard(request, deleting); if (rejected) return rejected;
-  if (request.method !== 'GET' && !deleting || deleting !== (id !== undefined) || id !== undefined && !validDeviceId(id) || new URL(request.url).search) return invalidQuery();
+  const deleting = request.method === 'DELETE', patching = request.method === 'PATCH', mutation = deleting || patching;
+  const rejected = guard(request, mutation); if (rejected) return rejected;
+  if (request.method !== 'GET' && !mutation || mutation !== (id !== undefined) || id !== undefined && !validDeviceId(id) || new URL(request.url).search) return invalidQuery();
+  let body: {silent: boolean} | undefined;
+  if (patching) {
+    if (Number(request.headers.get('content-length') ?? 0) > 1024) return invalidQuery();
+    try {
+      const v = await boundedJSON(request, 1024) as Record<string, unknown>;
+      if (!v || typeof v !== 'object' || Array.isArray(v) || Object.keys(v).length !== 1 || typeof v.silent !== 'boolean') return invalidQuery();
+      body = {silent: v.silent};
+    } catch { return invalidQuery(); }
+  }
   try {
     const token = sessionToken(request.headers.get('cookie'));
     if (!token) return cookie(failure('session_required',401));
-    const result = await callBackend(id === undefined ? '/v1/dashboard/devices' : `/v1/dashboard/devices/${id}`, token, undefined, undefined, deleting ? 'DELETE' : 'GET');
+    const result = await callBackend(id === undefined ? '/v1/dashboard/devices' : `/v1/dashboard/devices/${id}`, token, body, undefined, request.method);
     if (result.status !== 200) return backendError(result);
     let data: unknown;
     if (deleting) {
       if (!result.data || (result.data as {revoked?: unknown}).revoked !== true) throw Error('upstream_error');
       data = {revoked: true};
+    } else if (patching) {
+      const device = parseDevice(result.data);
+      if (device.device_id !== id || device.silent !== body!.silent) throw Error('upstream_error');
+      data = device;
     } else data = parseDevices(result.data);
     return NextResponse.json(data,{headers:{'Cache-Control':'no-store'}});
   } catch(e) {return failure(e instanceof Error && e.message==='server_configuration'?'server_configuration':'upstream_error',e instanceof Error && e.message==='server_configuration'?503:502);}
@@ -121,6 +134,6 @@ export async function devicesRoute(request: Request, id?: string) {
 function projectReceipt(raw:unknown, expected:unknown) {
   const v=raw as Record<string,unknown>;
   const sent=expected as Record<string,unknown>;
-  if(!v || !sent || typeof v.alert_id!=='string' || v.alert_id!==sent.alert_id || v.status!=='provider_accepted' || typeof v.expires_at!=='string' || !validUtc(v.expires_at) || v.acknowledged!==false || v.delivery_verified!==false || !['normal','critical'].includes(v.importance as string) || v.importance!==sent.importance)throw Error('upstream_error');
+  if(!v || !sent || typeof v.alert_id!=='string' || v.alert_id!==sent.alert_id || v.status!=='provider_accepted' || typeof v.expires_at!=='string' || !validUtc(v.expires_at) || v.acknowledged!==false || v.delivery_verified!==false || !['normal','urgent','critical'].includes(v.importance as string) || v.importance!==sent.importance)throw Error('upstream_error');
   return {alert_id:v.alert_id,status:v.status,expires_at:v.expires_at,acknowledged:false,delivery_verified:false,importance:v.importance};
 }

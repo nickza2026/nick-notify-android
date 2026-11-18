@@ -1,6 +1,31 @@
-# API สำหรับ service อื่นส่งและติดตามแจ้งเตือน
+# Notify API สำหรับระบบอื่นส่งและติดตามแจ้งเตือน
 
-สำหรับ backend-to-backend ผ่าน Go API ไม่ใช่ URL ของ Dashboard หรือ Node bridge ค่า `https://notify-api.example.org` เป็นตัวอย่าง ใช้ API base URL แบบ HTTPS และ application API key ที่เจ้าของระบบส่งให้ผ่านช่องทางส่วนตัว
+> ฉบับสัญญาสามระดับสำหรับ API ที่รองรับ `urgent` และ APK `0.10.0-notification-levels` ขึ้นไป ยังไม่ใช่การยืนยันว่า URL production ด้านล่างอัปเดตแล้ว ไฟล์ฉบับสองระดับที่ส่งก่อนหน้านี้คงเดิม
+
+เอกสารนี้ใช้สำหรับ backend-to-backend ผ่าน API ที่ใช้งานอยู่ ไม่ใช้ URL ของ Dashboard หรือ Firebase และไม่ต้องเข้าสู่ระบบ Google ก่อนเรียก
+
+**API Base URL**
+
+```text
+https://notify-alarm-api-7496986423345747739.olufy-0.nortezh.com
+```
+
+ระบบผู้เรียกใช้ application API key ที่เจ้าของระบบส่งให้ผ่านช่องทางส่วนตัว คีย์เชื่อมต่อของระบบนี้คือค่า `ALERT_API_KEY` ที่เจ้าของตั้งไว้ฝั่ง API; ตัวแปร `NOTIFY_API_KEY` ในตัวอย่างฝั่ง caller เก็บคีย์เดียวกัน ตัวอย่างข้อมูลทั้งหมดในเอกสารเป็นข้อมูลสมมติ ไม่มีคีย์จริง
+
+## เริ่มเชื่อมต่อ: ส่งข้อความเงียบหนึ่งเหตุการณ์
+
+ตัวอย่างต่อไปนี้ส่ง HTTP จริงเมื่อรัน `NOTIFY_API_KEY` เป็น environment variable ส่วนตัวของระบบผู้เรียก ไม่ใส่คีย์จริงใน source code หรือส่งไปยัง browser
+
+```bash
+curl --request POST \
+  'https://notify-alarm-api-7496986423345747739.olufy-0.nortezh.com/v1/alerts' \
+  --header "Authorization: Bearer ${NOTIFY_API_KEY}" \
+  --header 'Idempotency-Key: inventory:job:20261118:001' \
+  --header 'Content-Type: application/json; charset=utf-8' \
+  --data-raw '{"alert_id":"inventory-job-20261118-001","title":"ประมวลผลข้อมูลเสร็จแล้ว","message":"งานรอบ 09:00 เสร็จสมบูรณ์","ttl_seconds":300,"importance":"normal"}'
+```
+
+HTTP 202 หมายถึง provider รับคำขอ ไม่ยืนยันว่ามือถือได้รับแล้ว เก็บ `alert_id` เพื่ออ่านผลล่าสุดผ่าน `GET /v1/alerts/{alert_id}` ตามข้อ 4 ส่วนคีย์และ body สำหรับ retry ใช้ค่าของเหตุการณ์เดิมตามข้อ 3
 
 ## 1. Endpoint และสิทธิ์
 
@@ -12,7 +37,7 @@
 | `GET /v1/stats` | อ่านจำนวนเหตุการณ์และการรับทราบ | application Bearer key |
 | `GET /health` | ตรวจ configuration เบื้องต้น | ไม่ใช้ key |
 
-สี่ endpoint แรกใช้ `Authorization: Bearer <APPLICATION_API_KEY>` คีย์เป็น secret ฝั่ง service ไม่ใช่ username/password ของ Dashboard, Android access token หรือ public `key_id` คีย์นี้เข้าถึงการส่งและประวัติของระบบเดียวกัน ไม่ใช่คีย์แยกสิทธิ์ตาม service และไม่ต้อง login Dashboard ก่อนเรียก
+สี่ endpoint แรกใช้ `Authorization: Bearer <APPLICATION_API_KEY>` คีย์เป็น secret ฝั่ง service ไม่ใช่ username/password ของ Dashboard, Android access token, Firebase API key, `DEVICE_TOKEN_ENCRYPTION_KEY` หรือ public `key_id` ชื่อ `primary` คีย์นี้เข้าถึงการส่งและประวัติของระบบเดียวกัน ไม่ใช่คีย์แยกสิทธิ์ตาม service
 
 JSON response มี `Content-Type: application/json; charset=utf-8`, `Cache-Control: no-store`, `X-Content-Type-Options: nosniff` เวลา response เป็น RFC 3339 ใน UTC ลงท้าย `Z` และอาจมีเศษวินาที จำนวนหลักจึงไม่คงที่
 
@@ -55,7 +80,7 @@ Content-Type: application/json
 | `title` | string | บังคับ | ไม่ว่างหรือช่องว่างล้วน สูงสุด 120 Unicode code points |
 | `message` | string | บังคับ | ไม่ว่างหรือช่องว่างล้วน สูงสุด 2,000 Unicode code points |
 | `ttl_seconds` | integer | ไม่ส่ง = `300` | `30`–`10800` วินาที; `0` และค่านอกช่วงไม่ผ่าน |
-| `importance` | enum string | ไม่ส่ง = `critical` | `normal` / `critical` แบบ case-sensitive; ค่าว่างไม่ผ่าน |
+| `importance` | enum string | ไม่ส่ง = `critical` | `normal` / `urgent` / `critical` แบบ case-sensitive; ค่าว่างไม่ผ่าน |
 
 ช่องว่างต้น/ท้ายข้อความที่ไม่ใช่ช่องว่างล้วนยังเป็นส่วนหนึ่งของข้อความและการเทียบ retry จำนวน code points ไม่เท่ากับ bytes โดยเฉพาะภาษาไทยและ emoji นอกจาก body ยังมีเพดาน payload ส่งมือถือ 4,000 UTF-8 bytes รวมข้อความ, ID, เวลาและข้อมูลรับทราบที่ server เติม ข้อความที่ผ่านเพดานตัวอักษรจึงอาจได้ `422 payload_too_large`
 
@@ -64,11 +89,26 @@ Content-Type: application/json
 | ค่า | พฤติกรรม Android รุ่นรองรับ |
 |---|---|
 | `normal` | notification เงียบ ไม่เล่นเสียง ไม่สั่น ไม่เปิด full-screen และไม่เริ่ม alarm foreground service; ไม่หยุด critical ที่กำลังดัง |
-| `critical` | เริ่มเสียงปลุกต่อเนื่องจนผู้ใช้กดรับทราบในเครื่อง |
+| `urgent` | เสียงครั้งเดียวผ่านเสียงปลุก ดังแม้โหมดเงียบ/สั่น แต่ยังเงียบเมื่อ DND ห้าม Alarms; ไม่สั่น ไม่เริ่มเสียงปลุกวนหรือ full-screen และไม่หยุด critical ที่กำลังดัง |
+| `critical` | เริ่มเสียงปลุกต่อเนื่องจนผู้ใช้กดรับทราบในเครื่อง ดังแม้โหมดเงียบ/สั่น ยกระดับเสียงปลุกขั้นต่ำ 80% เป็นค่าเริ่มต้น |
+
+เจ้าของบัญชีตั้งเครื่องใดเครื่องหนึ่งเป็น "เงียบ" ได้จากหน้าอุปกรณ์บนเว็บ เครื่องนั้นจะได้รับ urgent/critical เป็นข้อความเท่านั้น service ไม่ต้องเปลี่ยน request และ response ยังรายงาน `importance` ตามที่ส่งขอ
+
+ตัวอย่างเหตุการณ์ด่วนใหม่:
+
+```json
+{
+  "alert_id": "inventory-low-20261118-001",
+  "title": "วัตถุดิบใกล้หมด",
+  "message": "กรุณาตรวจสอบปริมาณคงเหลือ",
+  "ttl_seconds": 300,
+  "importance": "urgent"
+}
+```
 
 TTL กำหนดเวลาล่าสุดที่เหตุการณ์ยังเริ่มแสดง/ปลุกได้ ไม่ใช่ระยะเวลาหยุดเสียง critical ที่เริ่มแล้ว การกลับมาปกติของอุปกรณ์ต้นทางไม่ใช่การรับทราบและไม่สั่งหยุดเสียงอัตโนมัติ
 
-normal ใช้ FCM priority `NORMAL` และอาจล่าช้าใน Doze/background ส่วน critical ใช้ `HIGH` ทั้งสองแบบขึ้นกับ permission, network และข้อจำกัด Android ไม่รับประกันเวลาถึงหรือเสียงในทุก OS state APK เก่าที่ไม่รู้จัก normal จะข้ามรายการ normal แทนการแปลงเป็นเสียงปลุก
+normal ใช้ FCM priority `NORMAL` และอาจล่าช้าใน Doze/background ส่วน urgent/critical ใช้ `HIGH` ทุกระดับขึ้นกับ permission, network และข้อจำกัด Android ไม่รับประกันเวลาถึงหรือเสียงในทุก OS state urgent/critical ใช้เสียงปลุกของ Android ไม่ใช่ระดับเสียงเรียกเข้า; DND ที่ไม่อนุญาตเสียงปลุกยังปิดเสียงได้และแอปปิด DND แทนผู้ใช้ไม่ได้ APK เก่าที่ไม่รองรับระดับ notice นั้นจะข้ามแทนการแปลงเป็นเสียงปลุก urgent ที่ส่งซ้ำหรือเปิดแอปใหม่ไม่เล่นเสียงครั้งใหม่ และยังรับทราบพร้อม sync ประวัติได้โดยไม่ต้องวนเสียงรอ Ack
 
 service ไม่ส่ง FCM token, device ID, `key_id` หรือรายชื่อผู้รับใน body นี้ ผู้รับมาจากทะเบียนอุปกรณ์ของบัญชีที่เจ้าของระบบตั้งไว้ หรือปลายทางเดิมที่ยังใช้งานอยู่ เหตุการณ์กระจายไปยังผู้รับที่เลือกไว้สำหรับการส่งนั้น การ retry ไม่เพิ่มผู้รับที่เพิ่งลงทะเบียนภายหลัง และการรับทราบแต่ละเครื่องแยกกัน
 
@@ -189,7 +229,7 @@ HTTP 200 ตัวอย่าง provider รับแล้ว ยังไม
 |---|---|---|
 | `alert_id` | string | ID เหตุการณ์ |
 | `title`, `message` | string | ข้อความที่รับไว้ |
-| `importance` | enum | `normal` / `critical` |
+| `importance` | enum | `normal` / `urgent` / `critical` |
 | `status` | enum | `provider_accepted` / `provider_failed` / `delivery_unknown`; ไม่เปลี่ยนเป็น acknowledged หลัง Ack |
 | `created_at` | timestamp | เวลาสร้างที่ server |
 | `provider_accepted_at` | timestamp / null | เวลาสรุป provider accepted; null เมื่อยังไม่ใช่ accepted ทั้งเหตุการณ์ |

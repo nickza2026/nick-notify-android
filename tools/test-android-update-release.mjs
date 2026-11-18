@@ -49,6 +49,7 @@ for (const [name, changes] of [
   ['wrong version code', { versionCode: 7 }],
   ['wrong version name', { versionName: '0.7.0-device-login' }],
   ['previous released version', { versionCode: 9, versionName: '0.9.0-google-owner' }],
+  ['latest public two-tier version', { versionCode: 10, versionName: '0.9.1-google-setup' }],
   ['wrong certificate', { pin: '0'.repeat(64) }],
 ]) {
   test(`rejects ${name} and retires a previously valid descriptor`, t => {

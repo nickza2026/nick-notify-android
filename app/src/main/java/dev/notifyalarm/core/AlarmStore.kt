@@ -7,13 +7,14 @@ import org.json.JSONObject
 import java.util.UUID
 
 enum class AlertImportance {
-    NORMAL, CRITICAL;
+    NORMAL, URGENT, CRITICAL;
 
     companion object {
         /** Missing is a legacy critical alert; an unknown explicit value is never promoted. */
         fun fromWire(value: String?): AlertImportance? = when (value) {
             null -> CRITICAL
             "normal" -> NORMAL
+            "urgent" -> URGENT
             "critical" -> CRITICAL
             else -> null
         }
@@ -118,8 +119,8 @@ object AlarmStore {
         val now = System.currentTimeMillis()
         for (i in 0 until array.length()) {
             val item = array.getJSONObject(i)
-            val isNormal = item.optString("importance", "critical") == "normal"
-            if (!(if (isNormal) item.optBoolean("normal_presented") else item.optBoolean("started")) &&
+            val isNotice = item.optString("importance", "critical") != "critical"
+            if (!(if (isNotice) item.optBoolean("normal_presented") else item.optBoolean("started")) &&
                 !item.isNull("expires_at") &&
                 item.optLong("expires_at", Long.MAX_VALUE) <= now) {
                 state.getJSONObject("terminal").put(item.getString("id"), JSONObject()
@@ -134,12 +135,12 @@ object AlarmStore {
     }
 
     /** Replays use the original expiry and mode, never the new push's claimed TTL or importance. */
-    internal fun normalForPresentation(context: Context, id: String): AlertRecord? = synchronized(lock) {
+    internal fun noticeForPresentation(context: Context, id: String): AlertRecord? = synchronized(lock) {
         val state = read(context)
         val array = state.getJSONArray("active")
         for (i in 0 until array.length()) {
             val item = array.getJSONObject(i)
-            if (item.getString("id") != id || item.optString("importance", "critical") != "normal") continue
+            if (item.getString("id") != id || item.optString("importance", "critical") == "critical") continue
             if (!item.optBoolean("normal_presented") && !item.isNull("expires_at") &&
                 item.optLong("expires_at", Long.MAX_VALUE) <= System.currentTimeMillis()) {
                 val kept = JSONArray()
@@ -151,18 +152,41 @@ object AlarmStore {
                 return@synchronized null
             }
             return@synchronized AlertRecord(id, item.getString("title"), item.getString("message"),
-                item.getLong("created_at"), AlertImportance.NORMAL)
+                item.getLong("created_at"), AlertImportance.fromWire(item.getString("importance"))!!)
         }
         null
     }
 
-    /** Record only after NotificationManager accepted the normal notification. */
-    internal fun markNormalPresented(context: Context, id: String) = synchronized(lock) {
+    internal fun noticePresented(context: Context, id: String): Boolean = synchronized(lock) {
+        val active = read(context).getJSONArray("active")
+        (0 until active.length()).any { index ->
+            val item = active.getJSONObject(index)
+            item.getString("id") == id && item.optBoolean("normal_presented")
+        }
+    }
+
+    /** One durable sound reservation per urgent ID, before notify; independent of presentation. */
+    internal fun reserveUrgentSound(context: Context, id: String): Boolean = synchronized(lock) {
+        val state = read(context)
+        val active = state.getJSONArray("active")
+        for (index in 0 until active.length()) {
+            val item = active.getJSONObject(index)
+            if (item.getString("id") != id || item.optString("importance") != "urgent" ||
+                item.optBoolean("normal_presented") || item.optBoolean("urgent_sound_consumed")) continue
+            item.put("urgent_sound_consumed", true)
+            write(context, state)
+            return@synchronized true
+        }
+        false
+    }
+
+    /** Record presentation only after NotificationManager accepted the notice. */
+    internal fun markNoticePresented(context: Context, id: String) = synchronized(lock) {
         val state = read(context)
         val array = state.getJSONArray("active")
         for (i in 0 until array.length()) {
             val item = array.getJSONObject(i)
-            if (item.getString("id") == id && item.optString("importance", "critical") == "normal" &&
+            if (item.getString("id") == id && item.optString("importance", "critical") != "critical" &&
                 !item.optBoolean("normal_presented")) {
                 item.put("normal_presented", true)
                 write(context, state)
@@ -218,13 +242,13 @@ object AlarmStore {
         // Reject conflicting/corrupt IDs too: a normal entry must never tombstone a critical one.
         if (terminal.has(id) || (0 until active.length()).any { i ->
                 val item = active.getJSONObject(i)
-                item.getString("id") == id && item.optString("importance", "critical") != "normal"
+                item.getString("id") == id && item.optString("importance", "critical") == "critical"
             }) return@synchronized false
         val remaining = JSONArray()
         var dismissed = false
         for (i in 0 until active.length()) {
             val item = active.getJSONObject(i)
-            if (item.getString("id") == id && item.optString("importance", "critical") == "normal") {
+            if (item.getString("id") == id && item.optString("importance", "critical") != "critical") {
                 dismissed = true
             } else remaining.put(item)
         }
@@ -278,10 +302,11 @@ object AlarmStore {
 
     /** In-memory playback truth never survives process death as a false "currently ringing" claim. */
     fun status(context: Context): String {
-        if (AlarmRuntime.isPlaying) return "กำลังส่งเสียงปลุก — กดรับทราบเพื่อหยุด"
+        if (AlarmRuntime.isPlaying) return "ตัวเล่นเสียงเริ่มแล้ว — เสียงจริงขึ้นกับ DND/ระดับเสียง; กดรับทราบเพื่อหยุด"
         val last = preferences(context).getString(STATUS_KEY, "พร้อมทดสอบเสียงปลุก")!!
         return if (hasCritical(context)) {
-            val detail = if (last.startsWith("กำลังส่งเสียง") || last.startsWith("กำลังเตรียมเสียง")) {
+            val detail = if (last.startsWith("ตัวเล่นเสียง") || last.startsWith("กำลังส่งเสียง") ||
+                last.startsWith("กำลังเตรียมเสียง")) {
                 "สถานะเดิมไม่ยืนยันว่าเสียงยังทำงานอยู่ เปิดแอปและทดสอบใหม่"
             } else last
             "มีเหตุการณ์ค้าง แต่เสียงยังไม่ทำงานหรือถูกขัดจังหวะ\n$detail"
@@ -292,4 +317,5 @@ object AlarmStore {
 
 internal object AlarmRuntime {
     @Volatile var isPlaying: Boolean = false
+    @Volatile var serviceAlive: Boolean = false
 }

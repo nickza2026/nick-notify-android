@@ -4,7 +4,7 @@
 
 ## ขอบเขตจริง
 
-- `POST /v1/alerts` ส่ง FCM HTTP v1 data message หา Pixel เครื่องเดียวตาม `FCM_DEVICE_TOKEN`; critical ใช้ HIGH, normal ใช้ NORMAL (อาจถูกเลื่อนการส่ง)
+- `POST /v1/alerts` ส่ง FCM HTTP v1 data message หา Pixel เครื่องเดียวตาม `FCM_DEVICE_TOKEN`; urgent/critical ใช้ HIGH, normal ใช้ NORMAL (อาจถูกเลื่อนการส่ง)
 - `202` หลัง FCM ตอบรับเท่านั้น โดยสถานะเป็น `provider_accepted` **ไม่ใช่ delivered / alarm_started / ผู้ใช้ได้ยิน**
 - เมื่อกำหนด `ACK_PUBLIC_BASE_URL` จะเปิด API รับ Ack จากแอปแบบ per-alert capability และ receipt query; หากไม่กำหนดจะ **ไม่ส่ง capability และไม่มี Ack endpoint** แอปหยุดเสียงในเครื่องได้ แต่ server ยังไม่ทราบว่าผู้ใช้รับทราบแล้ว
 - ยังไม่มี retry scheduler, device registration, callback, escalation หรือหลายเครื่อง
@@ -72,7 +72,7 @@ Invoke-RestMethod -Method Post -Uri 'http://127.0.0.1:8787/v1/alerts' `
 
 ### Request contract
 
-- `importance`: optional `"normal"` or `"critical"`, omitted defaults to `"critical"`; null/unknown values reject with 4xx. Critical retains continuous alarm until human Ack with HIGH FCM transport. Normal is notification-only (no sound, vibration or fullscreen), uses NORMAL transport and can be deferred. FCM data and POST/GET detail receipts include normalized `importance`; it counts toward the 4,000-byte data budget. Critical and legacy send `type=alert`, while normal sends `type=notice`: old APKs ignore the unknown notice rather than accidentally ring a normal notification as a critical alarm. Upgrade Android to receive normal notices. Omitted and explicit critical use the original idempotency hash, normal is distinct. Existing state entries missing the field read as critical without rewriting stored records. Unknown stored modes fail startup.
+- `importance`: optional `"normal"`, `"urgent"` or `"critical"`, omitted defaults to `"critical"`; null/unknown values reject with 4xx. Critical retains continuous alarm until human Ack with HIGH FCM transport. Normal is notification-only (no sound, vibration or fullscreen), uses NORMAL transport and can be deferred. Urgent uses HIGH transport and one-shot notification sound respecting device/channel silent and DND settings; it has no alarm service, vibration, fullscreen or interruption of active critical playback. FCM data and POST/GET detail receipts include normalized `importance`; it counts toward the 4,000-byte data budget. Critical and legacy send `type=alert`, while normal/urgent send `type=notice`: older APKs ignore unsupported notice modes rather than escalating them. Urgent needs APK 0.10.0-notification-levels or newer. Omitted and explicit critical use the original idempotency hash; normal and urgent each have distinct hashes. Existing state entries missing the field read as critical without rewriting stored records. Unknown stored modes fail startup.
 
 - `Content-Type: application/json`, `Authorization: Bearer ...`, `Idempotency-Key` required (อักษร A–Z/a–z/0–9/`_.:-` ความยาว 1–128)
 - `title`: nonblank สูงสุด 120 Unicode code points
@@ -81,7 +81,7 @@ Invoke-RestMethod -Method Post -Uri 'http://127.0.0.1:8787/v1/alerts' `
 - `ttl_seconds`: integer 30–10,800 default 300; ห้ามใช้แทนเวลาที่ต้องการให้เสียงหยุด
 - ปฏิเสธ field ที่ไม่รู้จัก ไม่มี remote cancel/ack command จาก endpoint นี้
 - Request body ไม่เกิน 16 KiB และ serialized FCM data ไม่เกิน **4,000 bytes** เพื่อเผื่อจากเพดาน FCM 4,096 bytes ภาษาไทยอาจเกินแม้จำนวนอักษรผ่าน
-- Output FCM data: `type=alert` สำหรับ critical หรือ `type=notice` สำหรับ normal, `importance`, `alert_id`, `title`, `message`, `expires_at` (UTC ISO8601); เมื่อเปิด Ack เพิ่ม `ack_url` และ random `ack_token` 32-byte base64url **เฉพาะ FCM data** (ไม่อยู่ใน response/status/file/log); Android priority HIGH สำหรับ critical หรือ NORMAL สำหรับ normal และ transport TTL ไม่เกินเวลาที่เหลือ โดย budget 4,000 bytes นับรวมสอง field ใหม่นี้
+- Output FCM data: `type=alert` สำหรับ critical หรือ `type=notice` สำหรับ normal/urgent, `importance`, `alert_id`, `title`, `message`, `expires_at` (UTC ISO8601); เมื่อเปิด Ack เพิ่ม `ack_url` และ random `ack_token` 32-byte base64url **เฉพาะ FCM data** (ไม่อยู่ใน response/status/file/log); Android priority HIGH สำหรับ urgent/critical หรือ NORMAL สำหรับ normal และ transport TTL ไม่เกินเวลาที่เหลือ โดย budget 4,000 bytes นับรวมสอง field ใหม่นี้
 
 ### Ack และ receipt (เปิดใช้เมื่อกำหนด HTTPS base URL เท่านั้น)
 
