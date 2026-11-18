@@ -53,9 +53,11 @@ test('enabled health, capability isolation, per-alert binding, canonical repeat,
   assert.equal((await f.ack(body.alert_id, 'wrong')).response.status, 401);
   assert.equal((await f.get(body.alert_id, data.ack_token)).response.status, 401);
   assert.equal((await f.get('unknown')).response.status, 404);
-  const second = await f.post({ ...body, alert_id: 'incident-two' }, 'key-two');
+  const second = await f.post({ ...body, alert_id: 'incident-two', importance: 'urgent' }, 'key-two');
   assert.equal(second.response.status, 202);
   assert.equal((await f.ack('incident-two', data.ack_token)).response.status, 401);
+  assert.equal((await f.ack('incident-two', f.calls[1].data.ack_token)).response.status, 200);
+  assert.equal((await f.get('incident-two')).data.importance, 'urgent');
   assert.equal((await f.post(body, 'different-key')).response.status, 409);
   assert.equal((await f.post(body)).response.headers.get('idempotency-replayed'), 'true');
   assert.equal(f.calls.length, 2);
@@ -199,19 +201,19 @@ test('missing ledger fails closed on restart and full ledger cannot evict unacke
   assert.ok(limited.get('one'));
 });
 
-test('normal mode survives idempotency retention pruning and restart in permanent ACK ledger', async t => {
+for (const importance of ['normal', 'urgent', 'critical']) test(`${importance} mode survives idempotency retention pruning and restart in permanent ACK ledger`, async t => {
   let clock = Date.parse('2026-10-19T10:00:00.000Z');
   const f = await fixture(t, { now: () => clock });
-  const first = await f.post({ ...body, importance: 'normal' });
+  const first = await f.post({ ...body, importance });
   assert.equal(first.response.status, 202);
-  assert.equal((await f.get(body.alert_id)).data.importance, 'normal');
+  assert.equal((await f.get(body.alert_id)).data.importance, importance);
   clock += 86_400_001;
   assert.equal((await f.post({ ...body, alert_id: 'incident-later' }, 'later-key')).response.status, 202);
   const state = JSON.parse(await readFile(f.statePath, 'utf8'));
   assert.ok(!state.entries.some(([, entry]) => entry.alertId === body.alert_id));
   const retained = await f.get(body.alert_id);
   assert.equal(retained.response.status, 200);
-  assert.equal(retained.data.importance, 'normal');
+  assert.equal(retained.data.importance, importance);
   assert.equal(retained.data.status, 'delivery_unknown_or_in_progress');
   const token = f.calls[0].data.ack_token;
   await new Promise(done => f.server.close(done));
@@ -222,7 +224,7 @@ test('normal mode survives idempotency retention pruning and restart in permanen
   const url = `http://127.0.0.1:${server.address().port}`;
   const detail = await fetch(`${url}/v1/alerts/${body.alert_id}`, { headers: { authorization: `Bearer ${API_KEY}` } });
   assert.equal(detail.status, 200);
-  assert.equal((await detail.json()).importance, 'normal');
+  assert.equal((await detail.json()).importance, importance);
   const ack = await fetch(`${url}/v1/alerts/${body.alert_id}/ack`, { method: 'POST',
     headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: '{}' });
   assert.equal(ack.status, 200);

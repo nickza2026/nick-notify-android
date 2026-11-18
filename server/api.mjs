@@ -47,10 +47,10 @@ function validate(input) {
   const ttl = input.ttl_seconds === undefined ? 300 : input.ttl_seconds;
   if (!Number.isInteger(ttl) || ttl < 30 || ttl > 10_800) throw new ApiError(422, 'invalid_ttl');
   const importance = input.importance === undefined ? 'critical' : input.importance;
-  if (importance !== 'critical' && importance !== 'normal') throw new ApiError(422, 'invalid_importance');
+  if (importance !== 'critical' && importance !== 'normal' && importance !== 'urgent') throw new ApiError(422, 'invalid_importance');
   // Critical's normalized hash must remain identical to the pre-importance schema.
   return { title: input.title, message: input.message, ttl_seconds: ttl,
-    ...(input.alert_id ? { alert_id: input.alert_id } : {}), ...(importance === 'normal' ? { importance } : {}) };
+    ...(input.alert_id ? { alert_id: input.alert_id } : {}), ...(importance !== 'critical' ? { importance } : {}) };
 }
 
 function storedImportance(entry) {
@@ -106,10 +106,10 @@ export async function createBridge({ apiKey, sender, statePath, ackBaseUrl, ackS
     for (const entry of store.entries.values()) {
       if (!entry.ackEnabled) continue;
       const ledger = ackStore.get(entry.alertId);
-      if (ledger.importance === undefined && storedImportance(entry) === 'normal') {
+      if (ledger.importance === undefined && storedImportance(entry) !== 'critical') {
         // Upgrade pre-mode ACK ledgers while the authoritative idempotency record
         // still exists; persist before serving, so pruning cannot erase normal.
-        await ackStore.setImportance(entry.alertId, 'normal');
+        await ackStore.setImportance(entry.alertId, storedImportance(entry));
       } else if (ledger.importance !== undefined && ledger.importance !== storedImportance(entry)) {
         throw new Error('ack_store_unavailable');
       }
@@ -208,7 +208,7 @@ export async function createBridge({ apiKey, sender, statePath, ackBaseUrl, ackS
       const expiresAt = new Date(createdAt + input.ttl_seconds * 1000).toISOString();
       // Older APKs ignore importance but treat type=alert as a critical alarm.
       // Unrecognized notice fails closed until the Android client is upgraded.
-      const data = { type: importance === 'normal' ? 'notice' : 'alert', alert_id: alertId, title: input.title, message: input.message, expires_at: expiresAt, importance };
+      const data = { type: importance === 'critical' ? 'alert' : 'notice', alert_id: alertId, title: input.title, message: input.message, expires_at: expiresAt, importance };
       const token = ackStore ? randomBytes(32).toString('base64url') : undefined;
       if (token) {
         data.ack_token = token;

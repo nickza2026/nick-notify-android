@@ -107,7 +107,7 @@ jobs:
           test -s "$apk"
           badging=$("$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$apk")
           case "$badging" in
-            *"package: name='dev.notifyalarm' versionCode='10' versionName='0.9.1-google-setup'"*) ;;
+            *"package: name='dev.notifyalarm' versionCode='11' versionName='0.10.0-notification-levels'"*) ;;
             *) echo '::error::Unexpected APK package/version; no artifact uploaded.'; exit 1 ;;
           esac
           signer=$("$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --print-certs "$apk" |
@@ -116,18 +116,18 @@ jobs:
             echo '::error::Signer differs from the existing Pixel APK; no artifact uploaded.'
             exit 1
           fi
-          cp "$apk" "$RUNNER_TEMP/notify-alarm-0.9.1-google-setup-debug.apk"
+          cp "$apk" "$RUNNER_TEMP/notify-alarm-0.10.0-notification-levels-debug.apk"
       - name: Generate descriptor from verified APK and Android SDK
         run: |
           node tools/android-update-release.mjs create \
-            "$RUNNER_TEMP/notify-alarm-0.9.1-google-setup-debug.apk" \
+            "$RUNNER_TEMP/notify-alarm-0.10.0-notification-levels-debug.apk" \
             "$ANDROID_HOME/build-tools/36.0.0/aapt" \
             "$ANDROID_HOME/build-tools/36.0.0/apksigner"
       - uses: actions/upload-artifact@v4
         with:
-          name: notify-alarm-0.9.1-google-setup-debug-${{ github.sha }}
+          name: notify-alarm-0.10.0-notification-levels-debug-${{ github.sha }}
           path: |
-            ${{ runner.temp }}/notify-alarm-0.9.1-google-setup-debug.apk
+            ${{ runner.temp }}/notify-alarm-0.10.0-notification-levels-debug.apk
             ${{ runner.temp }}/notify-alarm-update.json
           if-no-files-found: error
           retention-days: 7
@@ -159,12 +159,12 @@ jobs:
           test -x "$ANDROID_HOME/build-tools/36.0.0/apksigner"
       - uses: actions/download-artifact@v4
         with:
-          name: notify-alarm-0.9.1-google-setup-debug-${{ github.sha }}
+          name: notify-alarm-0.10.0-notification-levels-debug-${{ github.sha }}
           path: ${{ runner.temp }}/update-release
       - name: Reverify downloaded APK, descriptor and signature
         run: |
           node tools/android-update-release.mjs verify \
-            "$RUNNER_TEMP/update-release/notify-alarm-0.9.1-google-setup-debug.apk" \
+            "$RUNNER_TEMP/update-release/notify-alarm-0.10.0-notification-levels-debug.apk" \
             "$ANDROID_HOME/build-tools/36.0.0/aapt" \
             "$ANDROID_HOME/build-tools/36.0.0/apksigner"
       - name: Create stable release only if tag is unused
@@ -172,7 +172,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          tag=android-v0.9.1-google-setup
+          tag=android-v0.10.0-notification-levels
           # Exit 2 means no exact tag; all other errors fail closed.
           if git ls-remote --exit-code origin "refs/tags/$tag"; then
             echo '::error::Release tag already exists; refusing to overwrite it.'
@@ -186,7 +186,7 @@ jobs:
           gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" \
             -f "ref=refs/tags/$tag" -f "sha=$GITHUB_SHA" > /dev/null
           gh release create "$tag" \
-            "$RUNNER_TEMP/update-release/notify-alarm-0.9.1-google-setup-debug.apk" \
+            "$RUNNER_TEMP/update-release/notify-alarm-0.10.0-notification-levels-debug.apk" \
             "$RUNNER_TEMP/update-release/notify-alarm-update.json" \
             --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --verify-tag \
             --title "$tag" --notes 'Verified Android updater APK.' --latest

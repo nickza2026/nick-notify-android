@@ -5,12 +5,13 @@ import { useEffect, useRef, useState } from 'react';
 import { Alert, Button, Descriptions, Input, Modal, Radio, Timeline } from 'antd';
 import { ClientError, clientJSON } from '@/lib/client';
 import { acknowledgementIdentity, ackLabel, count, formatTime, providerLabel, type AlertDetail } from '@/lib/protocol';
+import type { Importance } from '@/lib/protocol';
 
-type Payload = { alert_id: string; title: string; message: string; ttl_seconds: number; importance: 'normal' | 'critical' };
+type Payload = { alert_id: string; title: string; message: string; ttl_seconds: number; importance: Importance };
 type Attempt = { body: Payload; key: string };
 
 export default function TestComposer() {
-  const [importance, setImportance] = useState<'normal' | 'critical'>('normal');
+  const [importance, setImportance] = useState<Importance>('normal');
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
   const [error, setError] = useState('');
@@ -109,6 +110,7 @@ export default function TestComposer() {
           <fieldset disabled={busy}><legend>ระดับการแจ้งเตือน</legend>
             <Radio.Group name="importance" value={importance} onChange={(event) => setImportance(event.target.value)}>
               <Radio className="radio-choice" value="normal"><strong>ธรรมดา · เงียบ</strong><small>ไม่ส่งเสียงหรือสั่น และไม่หยุดเสียงวิกฤตที่กำลังดัง</small></Radio>
+              <Radio className="radio-choice" value="urgent"><strong>ด่วน · เสียงตามเครื่อง</strong><small>เสียงแจ้งเตือนครั้งเดียวตามการตั้งค่าเครื่อง เคารพโหมดเงียบและห้ามรบกวน</small></Radio>
               <Radio className="radio-choice" value="critical"><strong>วิกฤต · ปลุก</strong><small>เสียงต่อเนื่องจนกว่าผู้ใช้กดรับทราบบนมือถือ</small></Radio>
             </Radio.Group>
           </fieldset>
@@ -118,6 +120,7 @@ export default function TestComposer() {
           <label>ข้อความ<Input.TextArea name="message" rows={5} required disabled={busy} aria-describedby="message-limit" /></label>
           <small id="message-limit" className="muted">ไม่เกิน 2000 ตัวอักษร Unicode · เซิร์ฟเวอร์ตรวจขนาดไบต์อีกครั้ง</small>
           <label>TTL (วินาที)<Input type="number" name="ttl" min={30} max={10800} defaultValue={300} required disabled={busy} /></label>
+          <p className="muted">เวลาล่าสุดที่ยังเริ่มแจ้งเตือนได้ ไม่ใช่เวลาหยุดเสียงวิกฤตที่เริ่มแล้ว</p>
           <p className="muted">ช่วงเวลาที่อนุญาตให้เริ่มแจ้งเตือน 30–10800 วินาที ไม่ใช่เวลาหยุดเสียง</p>
           <Button ref={submitButton} htmlType="submit" type="primary" loading={busy}>{busy ? 'กำลังส่ง…' : attempt ? 'ส่งเหตุการณ์ใหม่' : 'ส่งทดสอบ'}</Button>
         </form>

@@ -35,6 +35,7 @@
 |---|---|---|
 | `GET /api/devices` | ใหม่ | full Dashboard cookie session; ดูทะเบียนอุปกรณ์ |
 | `DELETE /api/devices/{device_id}` | ใหม่ | full Dashboard cookie session; ยกเลิกเครื่องหลังยืนยัน |
+| `PATCH /api/devices/{device_id}` | ใหม่ | full Dashboard cookie session; ตั้งเครื่องเป็นเงียบ ดู [ตั้งอุปกรณ์เป็นเงียบ](fe-device-silent-th.md) |
 | `GET /api/alerts/{alert_id}` | เปลี่ยน response | เพิ่มผลรายเครื่องและแหล่งที่มาของ Ack |
 | `GET /api/history` | เปลี่ยนความหมายรวม | รูปแบบเดิม แต่ Ack อย่างน้อยหนึ่งเครื่องไม่แปลว่ารับทราบครบ |
 | `GET /api/stats` | เปลี่ยนความหมายรวม | รูปแบบเดิม; การแตะนับแยกเครื่องและ dedup retry |
@@ -49,6 +50,7 @@
 | `GET /v1/history`, `GET /v1/stats` | เปลี่ยนความหมายรวม | ระบบส่ง; request/cursor เดิม |
 | `GET /v1/dashboard/devices` | ใหม่ | BFF เติม application key และ Dashboard session; browser ห้ามเรียกตรง |
 | `DELETE /v1/dashboard/devices/{device_id}` | ใหม่ | BFF ทำการยกเลิกทะเบียนแทน browser |
+| `PATCH /v1/dashboard/devices/{device_id}` | ใหม่ | BFF ตั้งค่า `silent` แทน browser |
 | `GET /v1/dashboard/alerts/{alert_id}`, `GET /v1/dashboard/history`, `GET /v1/dashboard/stats`, `POST /v1/dashboard/alerts` | เปลี่ยนตามคู่ BFF | BFF เท่านั้น; browser ใช้ `/api/*` |
 
 Web login/session/change-password/logout เดิมเป็น dependency ที่ยังใช้ได้ ดู [Dashboard authentication](fe-dashboard-auth-th.md) client token ของ Android ใช้แทน cookie หรือ application key ไม่ได้
@@ -244,6 +246,7 @@ HTTP 200 คืน login response ข้อ 4 พร้อม token ชุดใ
 | `items[].device_name` | ชื่อแสดงผล อาจซ้ำกันได้ ให้ใช้ device ID เป็น row key |
 | `items[].key_ids` | public key IDs ที่ผูก ห้ามนำไปใช้เป็น Bearer key |
 | `items[].active` | ลงทะเบียนรับรายการใหม่หรือไม่ ไม่ใช่สถานะออนไลน์/กำลังเล่นเสียง |
+| `items[].silent` | เครื่องนี้ตั้งเงียบจากหน้าเว็บหรือไม่ (ใหม่; ไม่มี field = `false`) ดู [ตั้งอุปกรณ์เป็นเงียบ](fe-device-silent-th.md) |
 | `items[].created_at`, `updated_at` | UTC timestamps ของทะเบียน ไม่ใช่เวลายืนยันส่งถึง |
 
 จอไม่มีข้อมูลให้แนะนำเปิด APK แล้ว login/ลงทะเบียน อย่าร้องขอให้ผู้ใช้คัดลอก application key ลงแอป หากโหลดล้มเหลวคงข้อมูลเดิมได้แต่ต้องบอกว่าอาจไม่ล่าสุด ไม่มี pagination/count/sort query เพิ่มในรุ่นนี้

@@ -2,6 +2,8 @@
 
 ขอบเขต: Web ผู้ดูแลหนึ่งบัญชี ไม่มี public signup เส้นทาง/DTO ด้านล่างตรงกับ mounted browser API รุ่น login ไม่ใช่คำยืนยันว่า production ถูกอัปเดตแล้ว
 
+การเปลี่ยนแปลงสามระดับ: `POST /api/test-alerts` รับ `urgent` เพิ่มเติม; receipt ของ route นี้, `GET /api/alerts/{id}` และสมาชิก `GET /api/history` คืน `importance: "urgent"` ได้ รูปแบบ auth, field อื่น, pagination, status, Ack และ retry เดิมไม่เปลี่ยน `normal`/`critical` เดิมยังใช้ได้ ต้องใช้ API รุ่นสามระดับและ APK `0.10.0-notification-levels` ขึ้นไปสำหรับ urgent
+
 ## 1. Endpoint inventory
 
 Browser เรียกเฉพาะ same-origin routes ต่อไปนี้ ไม่เรียก Go โดยตรงและไม่รับ application API key หรือ Ack capability
@@ -334,7 +336,7 @@ Errors: invalid ID `400`, ไม่พบ `404`, `401 session_required`, `403 pa
 | `alert_id` | string: ID ของเหตุการณ์ |
 | `title`, `message` | string: ข้อความ plain text ไม่ render เป็น HTML |
 | `status` | `provider_accepted`, `provider_failed`, `delivery_unknown` แยกจาก Ack; `acknowledged`/`pending_ack` เป็น filter ไม่ใช่ค่าของ field นี้ |
-| `importance` | `normal` หรือ `critical`; ประวัติเก่าที่ไม่มี field รองรับตาม legacy contract แต่ค่า unknown/null ไม่เดาเป็นระดับอื่น |
+| `importance` | `normal`, `urgent` หรือ `critical`; ประวัติเก่าที่ไม่มี field รองรับตาม legacy contract แต่ค่า unknown/null ไม่เดาเป็นระดับอื่น |
 | `created_at` | UTC RFC3339: สร้างเหตุการณ์ |
 | `provider_accepted_at` | timestamp/null: provider ตอบรับ ไม่ใช่เวลามือถือได้รับหรือเสียงเริ่ม |
 | `expires_at` | timestamp/null: latest start ไม่ใช่เวลาหยุด critical ที่เริ่มแล้ว |
@@ -356,6 +358,7 @@ Errors: invalid ID `400`, ไม่พบ `404`, `401 session_required`, `403 pa
 ไม่มี field เลือก device/group/FCM token จาก browser และไม่มี API รายงานว่าอุปกรณ์ online หรือเวอร์ชัน APK เท่าไร ห้ามขอ token/key จากผู้ใช้หรือสร้างสถานะ “พร้อมดัง” จาก provider acceptance
 
 - `normal`: แจ้งเตือนเงียบ ไม่สั่น ไม่เริ่ม alarm foreground service/fullscreen และไม่หยุด critical ที่กำลังดัง อาจไม่ได้เริ่มทันทีตามสถานะ Android/การส่ง ต้องใช้ APK ที่รองรับโหมดนี้ (ตั้งแต่ 0.5.0-importance); APK เก่าจะไม่ถูกบังคับยกระดับเป็นปลุกแทน
+- `urgent`: เสียงแจ้งเตือนครั้งเดียวตามระดับเสียง/channel ของเครื่อง เคารพโหมดเงียบและ DND ไม่มีการสั่น/เสียงปลุกวน/fullscreen ไม่หยุด critical ที่กำลังดัง การส่งซ้ำหรือเปิดแอปใหม่ไม่เริ่มเสียงซ้ำ และยังรายงาน Ack ได้
 - `critical`: เมื่ออุปกรณ์เริ่มเสียงได้แล้วจะดังต่อเนื่องจนผู้ใช้กดรับทราบ ไม่ได้ยืนยันว่าทุก OS state จะรับหรือเริ่มได้ จึงต้องแยก provider result กับรายงาน Ack เสมอ
 - ถ้าใช้ข้อมูลสาธิต ต้องติดป้ายชัด ไม่สวมข้อมูลสมมติเป็นการส่ง/กดบนโทรศัพท์จริง รายละเอียดโหมดเดิมอยู่ใน [importance contract](notification-importance-th.md)
 
@@ -381,7 +384,7 @@ Idempotency-Key: e4ba58bc-7872-4a31-9601-50edb63fccef
 | `title` | required nonempty string สูงสุด 120 Unicode characters | label/validation ชัด ไม่แปลงข้อความเป็น HTML |
 | `message` | required nonempty string สูงสุด 2000 Unicode characters | ยังต้องรับ payload-byte validation จาก server |
 | `ttl_seconds` | required integer 30–10800; UI เริ่ม 300 | หน่วยวินาที ไม่ใช่ระยะเวลาปลุก |
-| `importance` | required `normal` หรือ `critical` ใน browser route | UI ส่งชัดเจนเสมอ เริ่มที่ normal; ห้ามพึ่ง default critical ของ service API |
+| `importance` | required `normal`, `urgent` หรือ `critical` ใน browser route | ส่งค่าชัดเจน ไม่มี default ใน browser API |
 
 แบบ critical ต้องแสดงคำเตือนว่าเริ่มปลุกแล้วดังต่อเนื่องจนกดรับทราบบนอุปกรณ์ และให้ยืนยันก่อนส่ง ไม่อ้างว่า TTL ทำให้หยุดเสียง
 
@@ -435,7 +438,7 @@ Errors: browser schema/body/key ไม่ถูกต้องได้ `400 inv
 - [ ] เปลี่ยน localhost-only flow เป็น server-enforced session และ canonical-origin/CSRF handling
 - [ ] Login → force-change → history/send; ทดสอบเรียก API ตรงระหว่าง force-change ต้องไม่ผ่าน
 - [ ] Logout/password-change/expiry ล้าง protected state และไม่ทำให้แท็บเก่าข้ามสิทธิ์ได้
-- [ ] Form ส่ง explicit normal/critical พร้อม confirmation ที่เหมาะสมและ single in-flight state
+- [ ] Form ส่ง explicit normal/urgent/critical พร้อม confirmation ที่เหมาะสมและ single in-flight state
 - [ ] เก็บ ID/key เดิมใน uncertain attempt; ไม่แปลง timeout เป็นไม่เคยส่ง
 - [ ] Provider/Ack/TTL/clock labels ไม่อ้างการรับหรือเสียงที่ไม่เคยรายงาน
 - [ ] ข้อมูลสาธิต/ข้อมูลเก่า/loading/empty/unavailable แยกชัด ไม่มีตัวเลขหรือ Ack จำลองแทนผลจริง

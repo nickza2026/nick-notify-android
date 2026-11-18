@@ -51,6 +51,13 @@ class AlarmService : Service(), SharedPreferences.OnSharedPreferenceChangeListen
             }
         }
     }
+    private val watchVolume = object : Runnable {
+        override fun run() {
+            if (destroyed || !foreground || !AlarmStore.hasCritical(this@AlarmService)) return
+            AlarmVolume.observe(this@AlarmService)
+            main.postDelayed(this, 1_000L)
+        }
+    }
 
     private val focusListener = AudioManager.OnAudioFocusChangeListener { change ->
         main.post { onAudioFocusChanged(change) }
@@ -90,6 +97,7 @@ class AlarmService : Service(), SharedPreferences.OnSharedPreferenceChangeListen
 
     override fun onCreate() {
         super.onCreate()
+        AlarmRuntime.serviceAlive = true
         audioManager = getSystemService(AudioManager::class.java)
         focusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE)
             .setAudioAttributes(attributes)
@@ -215,14 +223,17 @@ class AlarmService : Service(), SharedPreferences.OnSharedPreferenceChangeListen
         try {
             AlarmStore.discardExpiredBeforeStart(this)
             if (!AlarmStore.hasCritical(this)) { stopSelf(); return }
+            AlarmVolume.begin(this)
             player?.start()
             AlarmRuntime.isPlaying = player?.isPlaying == true
             if (!AlarmRuntime.isPlaying) { fail("เสียงปลุกยังไม่เริ่มทำงาน"); return }
             main.removeCallbacks(retryFocus)
+            main.removeCallbacks(watchVolume)
+            main.postDelayed(watchVolume, 1_000L)
             focusRetryDelayMs = INITIAL_FOCUS_RETRY_MS
             AlarmNotifications.clearFailure(this)
             AlarmStore.markPlaybackStarted(this)
-            AlarmStore.setStatus(this, "กำลังส่งเสียงปลุก — กดรับทราบเพื่อหยุด")
+            AlarmStore.setStatus(this, "ตัวเล่นเสียงเริ่มแล้ว — เสียงจริงขึ้นกับ DND/ระดับเสียง; กดรับทราบเพื่อหยุด")
             refreshNotification()
         } catch (_: Exception) {
             fail("เริ่มเล่นเสียงปลุกไม่ได้ กรุณาเปิดแอปแล้วลองใหม่")
@@ -242,6 +253,7 @@ class AlarmService : Service(), SharedPreferences.OnSharedPreferenceChangeListen
         AlarmRuntime.isPlaying = false
         AlarmStore.setStatus(this, message)
         releasePlayer()
+        AlarmVolume.restore(this)
         if (foreground) {
             stopForeground(STOP_FOREGROUND_REMOVE)
             foreground = false
@@ -272,6 +284,7 @@ class AlarmService : Service(), SharedPreferences.OnSharedPreferenceChangeListen
 
     private fun releasePlayer() {
         main.removeCallbacks(retryFocus)
+        main.removeCallbacks(watchVolume)
         AlarmRuntime.isPlaying = false
         prepared = false
         try { player?.release() } catch (_: Exception) { }
@@ -285,6 +298,8 @@ class AlarmService : Service(), SharedPreferences.OnSharedPreferenceChangeListen
         main.removeCallbacksAndMessages(null)
         AlarmStore.preferences(this).unregisterOnSharedPreferenceChangeListener(this)
         releasePlayer()
+        AlarmVolume.restore(this)
+        AlarmRuntime.serviceAlive = false
         if (foreground) stopForeground(STOP_FOREGROUND_REMOVE)
         foreground = false
         if (!failure && AlarmStore.hasCritical(this)) {

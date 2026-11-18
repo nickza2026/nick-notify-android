@@ -222,7 +222,7 @@ func TestDashboardLifecycleAndUpgrade(t *testing.T) {
 	}
 	c, v, _ = dashCall(t, a, "POST", "/change-password", full, `{"current_password":"test"}`, "")
 	dashError(t, c, v, 400, "invalid_schema")
-	for _, importance := range []string{"normal", "critical"} {
+	for _, importance := range []string{"normal", "urgent", "critical"} {
 		payload := fmt.Sprintf(`{"alert_id":%q,"title":"test","message":"synthetic","importance":%q}`, importance, importance)
 		before := s.calls.Load()
 		for i := 0; i < 2; i++ {

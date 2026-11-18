@@ -72,38 +72,50 @@ func TestPureFCMFailuresAreSanitized(t *testing.T) {
 	}
 }
 func TestPureFCMExpiredNeverContactsProvider(t *testing.T) {
-	sender := fakeFCM(func(*http.Request) (*http.Response, error) {
-		t.Fatal("expired payload reached provider")
-		return nil, nil
-	})
-	var failure *SendError
-	err := sender.Send(context.Background(), testFCMData(time.Now().Add(-time.Second)), 60)
-	if !errors.As(err, &failure) || failure.Code != "expired_before_send" || failure.Ambiguous {
-		t.Fatal("expiry not rejected before provider")
+	for _, importance := range []string{"normal", "urgent", "critical"} {
+		sender := fakeFCM(func(*http.Request) (*http.Response, error) {
+			t.Fatal("expired payload reached provider")
+			return nil, nil
+		})
+		var failure *SendError
+		data := testFCMData(time.Now().Add(-time.Second))
+		data["importance"] = importance
+		err := sender.Send(context.Background(), data, 60)
+		if !errors.As(err, &failure) || failure.Code != "expired_before_send" || failure.Ambiguous {
+			t.Fatal("expiry not rejected before provider")
+		}
 	}
 }
 func TestPureFCMNormalTransport(t *testing.T) {
-	sender := fakeFCM(func(r *http.Request) (*http.Response, error) {
-		var body struct {
-			Message struct {
-				Data    map[string]string `json:"data"`
-				Android struct {
-					Priority string `json:"priority"`
-				} `json:"android"`
-			} `json:"message"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			t.Fatal(err)
-		}
-		if body.Message.Data["importance"] != "normal" || body.Message.Android.Priority != "NORMAL" {
-			t.Fatal("normal mode did not set normal transport")
-		}
-		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"name":"synthetic"}`))}, nil
-	})
-	data := testFCMData(time.Now().Add(time.Minute))
-	data["importance"] = "normal"
-	if err := sender.Send(context.Background(), data, 60); err != nil {
-		t.Fatal(err)
+	for _, importance := range []string{"normal", "urgent", "critical"} {
+		t.Run(importance, func(t *testing.T) {
+			sender := fakeFCM(func(r *http.Request) (*http.Response, error) {
+				var body struct {
+					Message struct {
+						Data    map[string]string `json:"data"`
+						Android struct {
+							Priority string `json:"priority"`
+						} `json:"android"`
+					} `json:"message"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Fatal(err)
+				}
+				priority := "HIGH"
+				if importance == "normal" {
+					priority = "NORMAL"
+				}
+				if body.Message.Data["importance"] != importance || body.Message.Android.Priority != priority {
+					t.Fatal("normal mode did not set normal transport")
+				}
+				return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"name":"synthetic"}`))}, nil
+			})
+			data := testFCMData(time.Now().Add(time.Minute))
+			data["importance"] = importance
+			if err := sender.Send(context.Background(), data, 60); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
 func TestPureFCMTargetedAndExactUnregistered(t *testing.T) {

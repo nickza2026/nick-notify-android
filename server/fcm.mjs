@@ -62,7 +62,7 @@ export async function createFcmSender({ credentialsPath, deviceToken, fetchImpl 
   }
 
   return async function send({ data, ttlSeconds }) {
-    if (data.importance !== 'normal' && data.importance !== 'critical') throw new SendFailure('invalid_importance');
+    if (data.importance !== 'normal' && data.importance !== 'critical' && data.importance !== 'urgent') throw new SendFailure('invalid_importance');
     const token = await accessToken();
     const remaining = Math.min(ttlSeconds, Math.floor((Date.parse(data.expires_at) - Date.now()) / 1000));
     if (!Number.isFinite(remaining) || remaining <= 0) throw new SendFailure('expired_before_send');

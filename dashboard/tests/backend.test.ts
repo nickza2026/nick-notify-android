@@ -29,11 +29,11 @@ test('data gates missing session before fetch and preserves forced-change and se
     globalThis.fetch=async()=>Response.json({error:{code:'unauthorized'}},{status:401});const appKey=await upstream(request('/api/stats'),'/v1/dashboard/stats');assert.equal(appKey.status,503);assert.equal((await appKey.json()).code,'server_configuration');assert.equal(appKey.headers.get('set-cookie'),null);
   }finally{globalThis.fetch=original;}
 });
-test('fixed send path, explicit normal/critical, identical idempotency retry and no cookie forwarding',async()=>{
+test('fixed send path, explicit normal/urgent/critical, identical idempotency retry and no cookie forwarding',async()=>{
   const {upstream}=await backend;
   setup();const original=globalThis.fetch;const calls:{url:string;init?:RequestInit}[]=[];
   globalThis.fetch=async(input,init)=>{calls.push({url:String(input),init});const sent=JSON.parse(String(init?.body));return Response.json({alert_id:sent.alert_id,status:'provider_accepted',expires_at:'2026-10-29T08:00:00Z',acknowledged:false,delivery_verified:false,importance:sent.importance,ack_capability:'NEVER_FORWARD'},{status:202});};
-  try{for(const importance of ['normal','critical']){const body={alert_id:'synthetic-one',title:'test',message:'synthetic',ttl_seconds:300,importance};for(let i=0;i<2;i++){const response=await upstream(request('/api/test-alerts',body),'/v1/dashboard/alerts',undefined,body,'synthetic-idempotency-key');assert.deepEqual(await response.json(),{alert_id:'synthetic-one',status:'provider_accepted',expires_at:'2026-10-29T08:00:00Z',acknowledged:false,delivery_verified:false,importance});}assert.equal(calls.at(-1)?.init?.body,calls.at(-2)?.init?.body);}
+  try{for(const importance of ['normal','urgent','critical']){const body={alert_id:'synthetic-one',title:'test',message:'synthetic',ttl_seconds:300,importance};for(let i=0;i<2;i++){const response=await upstream(request('/api/test-alerts',body),'/v1/dashboard/alerts',undefined,body,'synthetic-idempotency-key');assert.deepEqual(await response.json(),{alert_id:'synthetic-one',status:'provider_accepted',expires_at:'2026-10-29T08:00:00Z',acknowledged:false,delivery_verified:false,importance});}assert.equal(calls.at(-1)?.init?.body,calls.at(-2)?.init?.body);}
     for(const call of calls){assert.equal(call.url,'http://127.0.0.1:8791/v1/dashboard/alerts');const headers=new Headers(call.init?.headers);assert.equal(headers.get('cookie'),null);assert.equal(headers.get('idempotency-key'),'synthetic-idempotency-key');assert.equal(headers.get('x-dashboard-session'),token);assert.equal(call.init?.redirect,'manual');}
   }finally{globalThis.fetch=original;}
 });

@@ -17,6 +17,23 @@ type legacyTarget interface{ HasLegacyTarget() bool }
 type deliveryTarget struct {
 	id, name, token, cap string
 	hash                 []byte
+	silent               bool
+}
+
+// Silent devices get a normal notice: supported APKs show text only, legacy APKs skip
+// notice entirely, so a muted phone can never start an urgent or critical sound.
+func (a *API) devicePayload(id string, data map[string]string, t deliveryTarget) map[string]string {
+	payload := make(map[string]string, len(data)+2)
+	for k, v := range data {
+		payload[k] = v
+	}
+	payload["ack_token"] = t.cap
+	payload["ack_url"] = a.AckBase + "/v1/alerts/" + id + "/ack"
+	if t.silent && payload["importance"] != "normal" {
+		payload["type"] = "notice"
+		payload["importance"] = "normal"
+	}
+	return payload
 }
 
 func (a *API) reserveTargets(ctx context.Context, tx *sql.Tx, id string) ([]deliveryTarget, bool, error) {
@@ -32,7 +49,7 @@ func (a *API) reserveTargets(ctx context.Context, tx *sql.Tx, id string) ([]deli
 	if managed && len(a.DeviceTokenKey) != 32 {
 		return nil, true, fail(503, "device_registration_not_configured")
 	}
-	rows, e := tx.QueryContext(ctx, `SELECT d.id::text,d.device_name,s.token_cipher,s.token_hash FROM client_devices d JOIN client_subscriptions s ON s.device_id=d.id WHERE d.active AND d.owner_id=1 AND s.key_id='primary' ORDER BY d.id LIMIT 21`)
+	rows, e := tx.QueryContext(ctx, `SELECT d.id::text,d.device_name,d.silent,s.token_cipher,s.token_hash FROM client_devices d JOIN client_subscriptions s ON s.device_id=d.id WHERE d.active AND d.owner_id=1 AND s.key_id='primary' ORDER BY d.id LIMIT 21`)
 	if e != nil {
 		return nil, managed, e
 	}
@@ -40,7 +57,7 @@ func (a *API) reserveTargets(ctx context.Context, tx *sql.Tx, id string) ([]deli
 	for rows.Next() {
 		var v deliveryTarget
 		var sealed []byte
-		if e = rows.Scan(&v.id, &v.name, &sealed, &v.hash); e != nil {
+		if e = rows.Scan(&v.id, &v.name, &v.silent, &sealed, &v.hash); e != nil {
 			break
 		}
 		v.token, e = a.openToken(sealed)
@@ -87,12 +104,7 @@ func (a *API) sendTargets(id string, expires time.Time, data map[string]string, 
 		go func() {
 			defer wg.Done()
 			defer func() { <-slots }()
-			payload := make(map[string]string, len(data)+2)
-			for k, v := range data {
-				payload[k] = v
-			}
-			payload["ack_token"] = t.cap
-			payload["ack_url"] = a.AckBase + "/v1/alerts/" + id + "/ack"
+			payload := a.devicePayload(id, data, t)
 			outcome, code := "provider_accepted", ""
 			remaining := int(time.Until(expires).Seconds())
 			if a.Now != nil {

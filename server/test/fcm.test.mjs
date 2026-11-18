@@ -54,17 +54,17 @@ test('FCM sender signs scoped JWT, uses HIGH data payload and caches OAuth token
   assert.equal(sends, 2);
 });
 
-test('normal mode uses NORMAL transport and preserves data mode', async t => {
+for (const importance of ['normal', 'urgent', 'critical']) test(`${importance} mode uses appropriate transport and preserves data mode`, async t => {
   const path = await credentials(t);
   const sender = await createFcmSender({ credentialsPath: path, deviceToken: 'fake-device-token', fetchImpl: async (url, init) => {
     if (url.includes('oauth2')) return Response.json({ access_token: 'fake', expires_in: 3600 });
     const body = JSON.parse(init.body).message;
-    assert.equal(body.data.importance, 'normal');
-    assert.equal(body.android.priority, 'NORMAL');
+    assert.equal(body.data.importance, importance);
+    assert.equal(body.android.priority, importance === 'normal' ? 'NORMAL' : 'HIGH');
     return Response.json({ name: 'synthetic' });
   } });
   const data = message();
-  data.data.importance = 'normal';
+  data.data.importance = importance;
   await sender(data);
 });
 
@@ -92,13 +92,14 @@ test('FCM transport interruption is ambiguous and provider bodies are never surf
   }
 });
 
-test('expired message never reaches FCM after OAuth', async t => {
+for (const importance of ['normal', 'urgent', 'critical']) test(`${importance} expired message never reaches FCM after OAuth`, async t => {
   const path = await credentials(t);
   const sender = await createFcmSender({ credentialsPath: path, deviceToken: 'fake-device-token', fetchImpl: async url => {
     assert.equal(url, 'https://oauth2.googleapis.com/token');
     return Response.json({ access_token: 'fake', expires_in: 3600 });
   } });
   const expired = message();
+  expired.data.importance = importance;
   expired.data.expires_at = new Date(Date.now() - 1000).toISOString();
   await assert.rejects(sender(expired), error => error.code === 'expired_before_send' && !error.ambiguous);
 });

@@ -6,9 +6,32 @@ const backend = import('../lib/backend');
 const id = '11111111-1111-4111-8111-111111111111';
 const token = 'S'.repeat(43);
 function setup() { process.env.DASHBOARD_PUBLIC_URL='https://console.example'; process.env.BACKEND_URL='http://127.0.0.1:8791'; process.env.BACKEND_API_KEY='synthetic-server-key'; delete process.env.BACKEND_API_KEY_FILE; }
-function request(method='GET', authenticated=true, origin='https://console.example') {
-  return new Request('http://0.0.0.0:3010/api/devices'+(method==='DELETE'?`/${id}`:''), {method,headers:{host:'console.example',origin,'content-type':'application/json','x-notify-request':'dashboard',...(authenticated?{cookie:`__Host-notify_session=${token}`}:{})}});
+function request(method='GET', authenticated=true, origin='https://console.example', body?:string) {
+  return new Request('http://0.0.0.0:3010/api/devices'+(method==='DELETE'||method==='PATCH'?`/${id}`:''), {method,body,headers:{host:'console.example',origin,'content-type':'application/json','x-notify-request':'dashboard',...(authenticated?{cookie:`__Host-notify_session=${token}`}:{})}});
 }
+const deviceRow = {device_id:id,installation_id:id,device_name:'เครื่องจำลอง',key_ids:['primary'],active:true,created_at:'2026-11-08T10:00:00Z',updated_at:'2026-11-08T10:00:00Z'};
+test('device mute uses PATCH with only the silent flag and verifies the stored result', async(t)=>{
+  setup(); const {devicesRoute}=await backend; const fetchBefore=globalThis.fetch; t.after(()=>{globalThis.fetch=fetchBefore;}); let calls=0;
+  globalThis.fetch=async(url,options)=>{
+    calls++; assert.equal(new URL(String(url)).pathname,`/v1/dashboard/devices/${id}`); assert.equal(options?.method,'PATCH');
+    assert.deepEqual(JSON.parse(String(options?.body)),{silent:true});
+    return Response.json({...deviceRow,silent:true,fcm_token:'NEVER_FORWARD'});
+  };
+  for (const body of ['{}','{"silent":"true"}','{"silent":null}','{"silent":true,"active":false}','[]','not json']) {
+    assert.equal((await devicesRoute(request('PATCH',true,undefined,body),id)).status,400,body);
+  }
+  assert.equal((await devicesRoute(request('PATCH',true,'https://evil.example','{"silent":true}'),id)).status,403);
+  assert.equal((await devicesRoute(request('PATCH',false,undefined,'{"silent":true}'),id)).status,401);
+  assert.equal((await devicesRoute(request('PATCH',true,undefined,'{"silent":true}'),'bad')).status,400);
+  assert.equal(calls,0);
+  const response=await devicesRoute(request('PATCH',true,undefined,'{"silent":true}'),id);
+  assert.equal(response.status,200); const dto=await response.json();
+  assert.equal(dto.silent,true); assert.ok(!JSON.stringify(dto).includes('NEVER_FORWARD')); assert.equal(calls,1);
+  globalThis.fetch=async()=>Response.json({...deviceRow,silent:false});
+  assert.equal((await devicesRoute(request('PATCH',true,undefined,'{"silent":true}'),id)).status,502,'unconfirmed mute must not look successful');
+  globalThis.fetch=async()=>Response.json({error:{code:'device_not_found'}},{status:404});
+  assert.equal((await devicesRoute(request('PATCH',true,undefined,'{"silent":true}'),id)).status,404);
+});
 test('device BFF gates auth/origin and projects only public registration state', async (t) => {
   setup(); const {devicesRoute}=await backend; const fetchBefore=globalThis.fetch; t.after(()=>{globalThis.fetch=fetchBefore;});
   let calls=0;

@@ -13,13 +13,19 @@ import { createHash, randomUUID } from 'node:crypto';
 import { cdpClient, freshScreenshot, waitFor } from './dashboard-browser-support.mjs';
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const webSource = resolve(process.env.NOTIFY_TEST_WEB_ROOT ?? join(repo, 'dashboard'));
+if (process.env.NOTIFY_TEST_WEB_ROOT) {
+  const location = relative(join(repo, '.local-tools'), webSource);
+  assert.ok(location && !location.startsWith('..') && !location.includes(`..${sep}`), 'Web snapshot must be inside owned .local-tools');
+  assert.ok(!lstatSync(webSource).isSymbolicLink(), 'Web snapshot must not be a link');
+}
 const root = mkdtempSync(join(tmpdir(), 'notify-dashboard-browser-'));
 const runID = `${new Date().toISOString().replace(/[:.]/g, '-')}-${randomUUID().slice(0, 8)}`;
 const evidence = join(repo, 'artifacts', 'dashboard-auth-check', runID);
 mkdirSync(evidence, { recursive: true });
 const report = { run_id: runID, started_at: new Date().toISOString(), passed: false, synthetic_only: true, real_fcm: false, cases: [], screenshots: [], cleanup: false };
 const cleanEnv = { ...process.env };
-for (const name of ['DATABASE_URL','TEST_DB_URL','GOOGLE_APPLICATION_CREDENTIALS','FCM_DEVICE_TOKEN','ALERT_API_KEY','DEVICE_TOKEN_ENCRYPTION_KEY','BACKEND_API_KEY_FILE','BACKEND_API_KEY','DASHBOARD_BOOTSTRAP_PASSWORD','NODE_OPTIONS']) delete cleanEnv[name];
+for (const name of ['DATABASE_URL','TEST_DB_URL','GOOGLE_APPLICATION_CREDENTIALS','FCM_DEVICE_TOKEN','ALERT_API_KEY','DEVICE_TOKEN_ENCRYPTION_KEY','BACKEND_API_KEY_FILE','BACKEND_API_KEY','DASHBOARD_BOOTSTRAP_PASSWORD','NODE_OPTIONS','AUTH_MODE','FIREBASE_PROJECT_ID','FIREBASE_OWNER_UID','FIREBASE_WEB_API_KEY','FIREBASE_WEB_AUTH_DOMAIN','FIREBASE_WEB_PROJECT_ID','FIREBASE_WEB_APP_ID']) delete cleanEnv[name];
 let fixture, web, browser, manifest, cdp, browserCDP;
 const children = [];
 function owned(exe, args, options = {}) {
@@ -181,7 +187,7 @@ async function checkDialogViewport(label) {
 async function checkRadioControls(label) {
   const metrics=await cdp.evaluate(`Array.from(document.querySelectorAll('.radio-choice')).map(card=>{const i=card.querySelector('.ant-radio').getBoundingClientRect(),d=card.querySelector('.ant-radio-label').getBoundingClientRect(),c=card.getBoundingClientRect();return {input_width:i.width,description_width:d.width,description_right:d.right,card_right:c.right};})`);
   (report.radio_controls ??= []).push({label,metrics});
-  assert.equal(metrics.length,2,'Both notification modes visible');
+  assert.equal(metrics.length,3,'All three notification modes visible');
   assert.ok(metrics.every(m=>m.input_width<=32&&m.description_width>=100&&m.description_right<=m.card_right+1),'Compact radio controls must not squeeze or clip mode descriptions');
 }
 async function checkAntTable() {
@@ -208,8 +214,8 @@ function removeOwnedRoot() {
 }
 
 try {
-  const sources = ['app/globals.css','app/console-shell.tsx','app/auth-form.tsx','app/dashboard.tsx','app/test/test-composer.tsx','app/layout.tsx','app/error.tsx','app/ant-provider.tsx','app/devices/page.tsx','app/devices/devices.tsx','app/api/devices/route.ts','app/api/devices/[id]/route.ts','lib/ant-theme.ts','lib/protocol.ts','lib/backend.ts','lib/security.ts','lib/client.ts','package.json','pnpm-lock.yaml'].map(name => join(repo,'dashboard',name));
-  const buildFile = join(repo,'dashboard','.next','BUILD_ID');
+  const sources = ['app/globals.css','app/console-shell.tsx','app/auth-form.tsx','app/dashboard.tsx','app/test/test-composer.tsx','app/layout.tsx','app/error.tsx','app/ant-provider.tsx','app/devices/page.tsx','app/devices/devices.tsx','app/api/devices/route.ts','app/api/devices/[id]/route.ts','lib/ant-theme.ts','lib/protocol.ts','lib/backend.ts','lib/security.ts','lib/client.ts','package.json','pnpm-lock.yaml'].map(name => join(webSource,name));
+  const buildFile = join(webSource,'.next','BUILD_ID');
   assert.ok(statSync(buildFile).mtimeMs >= Math.max(...sources.map(file => statSync(file).mtimeMs)), 'Build must be newer than all changed UI sources');
   report.source = { commit:execFileSync('git',['rev-parse','HEAD'],{cwd:repo,encoding:'utf8'}).trim(), ui_sha256:createHash('sha256').update(sources.map(file => readFileSync(file)).reduce((a,b)=>Buffer.concat([a,b]),Buffer.alloc(0))).digest('hex'), build_id:readFileSync(buildFile,'utf8').trim() };
   const binary = join(root, process.platform === 'win32' ? 'fixture.exe' : 'fixture');
@@ -219,11 +225,11 @@ try {
   assert.equal(new URL(manifest.api_url).hostname, '127.0.0.1'); assert.equal(new URL(manifest.web_url).hostname, '127.0.0.1');
   assert.equal(manifest.database_encoding,'UTF8');report.database={encoding:manifest.database_encoding,version:manifest.database_version};
   const port = await new Promise((resolve,reject) => { const server=createServer();server.on('error',reject);server.listen(0,'127.0.0.1',() => { const port=server.address().port;server.close(()=>resolve(port)); }); });
-  const standalone = join(repo,'dashboard','.next','standalone'); const runtime=join(root,'web'); mkdirSync(runtime);
+  const standalone = join(webSource,'.next','standalone'); const runtime=join(root,'web'); mkdirSync(runtime);
   for (const name of ['server.js','package.json','.next']) cpSync(join(standalone,name),join(runtime,name),{recursive:true});
   symlinkSync(join(standalone,'node_modules'),join(runtime,'node_modules'),process.platform === 'win32' ? 'junction' : 'dir');
-  cpSync(join(repo,'dashboard','.next','static'),join(runtime,'.next','static'),{recursive:true});
-  if (existsSync(join(repo,'dashboard','public'))) cpSync(join(repo,'dashboard','public'),join(runtime,'public'),{recursive:true});
+  cpSync(join(webSource,'.next','static'),join(runtime,'.next','static'),{recursive:true});
+  if (existsSync(join(webSource,'public'))) cpSync(join(webSource,'public'),join(runtime,'public'),{recursive:true});
   web=owned(process.execPath,[join(runtime,'server.js')],{cwd:runtime,env:{...cleanEnv,NODE_ENV:'production',HOSTNAME:'127.0.0.1',PORT:String(port),NEXT_TELEMETRY_DISABLED:'1',DASHBOARD_PUBLIC_URL:manifest.web_url,BACKEND_URL:manifest.api_url,BACKEND_API_KEY:manifest.api_key,BACKEND_ALLOWED_HTTP_ORIGINS:'',DASHBOARD_DEMO_MODE:'true'}});
   assert.equal((await control('proxy',{url:`http://127.0.0.1:${port}`})).status,200);
   await waitFor(async () => (await pageRequest('/login')).status===200,'production standalone login');
@@ -265,7 +271,7 @@ try {
   await checkFieldFamily('.stack-form input,.stack-form textarea','composer-dark');await checkRadioControls('composer-desktop');await screenshot('composer-dark-desktop','ธรรมดา · เงียบ');
   await cdp.send('Emulation.setDeviceMetricsOverride',{width:360,height:844,deviceScaleFactor:1,mobile:true});await checkCompactMobileHeader();await checkRadioControls('composer-mobile-360');await checkLayout(360,'composer-mobile-360');await screenshot('composer-dark-mobile-360','ธรรมดา · เงียบ');
   await cdp.send('Emulation.setDeviceMetricsOverride',{width:1440,height:900,deviceScaleFactor:1,mobile:false});
-  assert.equal(await cdp.evaluate('document.querySelectorAll("input[name=importance]").length'),2,'Ant group must expose both stable native radio fields');
+  assert.equal(await cdp.evaluate('document.querySelectorAll("input[name=importance]").length'),3,'Ant group must expose all three stable native radio fields');
   assert.equal(await cdp.evaluate('document.querySelector("input[name=importance]").checked'),true);
   const prefix='ข้อมูลสังเคราะห์เท่านั้น <b>ไม่ใช่ HTML</b> ไม่มีการส่ง FCM จริง ';
   const longMessage=prefix+'Synthetic message only. '.repeat(100).slice(0,2000-prefix.length);
@@ -324,6 +330,30 @@ try {
   await waitFor(async()=> (await control('inspect')).data.cursor_calls===2,'pagination retry actually performs another request');
   await textWait('document.body.innerText.includes("โหลดแล้ว 28 รายการ")','pagination retry appends actual remaining rows');
   await screenshot('pagination-retry-recovered','โหลดแล้ว 28 รายการ');check('cursor-page transport error can be retried without duplicate rows or changed filters');
+  // Urgent is a one-shot notice, not a critical-confirmation path. The fixture
+  // records the actual BFF/Go submission but cannot contact FCM or play audio.
+  await navigate('/test');
+  await cdp.click('Array.from(document.querySelectorAll("label")).find(e=>e.textContent.includes("ด่วน · เสียงตามเครื่อง"))');
+  await cdp.fill('input[name=title]','ทดสอบด่วนจำลอง ไม่มี FCM จริง');
+  await cdp.fill('textarea[name=message]','เสียงครั้งเดียวตามการตั้งค่าเครื่อง ข้อมูลสังเคราะห์เท่านั้น');
+  assert.equal(await cdp.evaluate('document.querySelector("input[name=importance][value=urgent]").checked'),true);
+  const beforeUrgent=(await control('inspect')).data.send_calls;
+  await cdp.click('document.querySelector("form button[type=submit]")');
+  await textWait('document.body.innerText.includes("ผู้ให้บริการรับคำขอแล้ว — ยังไม่ยืนยัน")','synthetic urgent receipt');
+  assert.equal(await cdp.evaluate('document.querySelectorAll("[role=dialog][aria-modal=true]").length'),0,'urgent must not open critical confirmation');
+  assert.equal((await control('inspect')).data.send_calls,beforeUrgent+1);
+  assert.ok(Object.values((await control('inspect')).data.importance).includes('urgent'));
+  await cdp.send('Emulation.setDeviceMetricsOverride',{width:360,height:844,deviceScaleFactor:1,mobile:true});
+  await checkLayout(360,'urgent-mobile-360');await screenshot('urgent-receipt-mobile-360','ด่วน · เสียงตามเครื่อง');
+  await cdp.send('Emulation.setDeviceMetricsOverride',{width:1440,height:900,deviceScaleFactor:1,mobile:false});
+  await navigate('/');await textWait('document.body.innerText.includes("ทดสอบด่วนจำลอง ไม่มี FCM จริง")','urgent history projection');
+  await cdp.evaluate('document.querySelector(".history-section").scrollIntoView({block:"start"})');
+  await screenshot('urgent-history-desktop','ด่วน · เสียงตามเครื่อง');
+  await cdp.click('Array.from(document.querySelectorAll(".history-section tbody tr")).find(row=>row.textContent.includes("ทดสอบด่วนจำลอง ไม่มี FCM จริง")).querySelector("button")');
+  await textWait('Boolean(document.querySelector("[role=dialog] .detail-fields")) && document.querySelector("[role=dialog]").textContent.includes("ด่วน · เสียงตามเครื่อง")','urgent detail projection');
+  await checkDialogViewport('urgent-detail-desktop');await screenshot('urgent-detail-desktop','ด่วน · เสียงตามเครื่อง');
+  await cdp.key('Escape','Escape',27);await textWait('!document.querySelector("[role=dialog][aria-modal=true]")','urgent detail Escape');
+  check('three native importance choices; urgent no critical modal; real BFF/Go urgent receipt/history with synthetic sender');
   // Same account, distinct installations; every token is synthetic and the
   // fixture Sender cannot contact FCM. Never serialize client tokens/caps into report.
   const native = (path,body,token) => localRequest(manifest.api_url+path,{body,headers:token?{Authorization:`Bearer ${token}`}:{}});

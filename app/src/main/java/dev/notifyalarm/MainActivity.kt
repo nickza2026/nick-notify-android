@@ -31,8 +31,12 @@ import androidx.core.content.FileProvider
 import com.google.firebase.FirebaseApp
 import com.google.firebase.messaging.FirebaseMessaging
 import dev.notifyalarm.core.AlarmEngine
+import dev.notifyalarm.core.AlarmNotifications
 import dev.notifyalarm.core.AlarmStore
 import dev.notifyalarm.core.AlarmSoundSettings
+import dev.notifyalarm.core.AlarmVolume
+import dev.notifyalarm.core.AlertImportance
+import dev.notifyalarm.core.DndCheck
 import dev.notifyalarm.sync.AckSync
 import dev.notifyalarm.sync.ClientAccount
 import dev.notifyalarm.sync.ClientApi
@@ -61,6 +65,7 @@ class MainActivity : Activity() {
     private lateinit var active: TextView
     private lateinit var remote: TextView
     private lateinit var sound: TextView
+    private lateinit var volumeSettingsButton: Button
     private lateinit var ackStatus: TextView
     private lateinit var accountStatus: TextView
     private lateinit var accountMessage: TextView
@@ -98,6 +103,7 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        AlarmVolume.recoverOnOpen(this)
         updater = UpdateClient(applicationContext)
         val layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -132,11 +138,27 @@ class MainActivity : Activity() {
             openSettings(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
         }
         button("ตั้งค่าระดับเสียงปลุก") { openSettings(Intent(Settings.ACTION_SOUND_SETTINGS)) }
-        button("ตั้งค่าเสียง / Do Not Disturb") { openSettings(Intent(Settings.ACTION_SOUND_SETTINGS)) }
+        text("วิกฤตและด่วนใช้เสียงปลุก จึงดังแม้เครื่องอยู่โหมดเงียบหรือสั่น แต่ถ้า Do Not Disturb ห้าม Alarms (เช่น Total silence) Android จะปิดเสียงนี้ แอปปิด DND แทนผู้ใช้ไม่ได้ ให้อนุญาตสิทธิ์ DND และเลือกอนุญาต Alarms ใน Settings ของระบบ")
+        button("อนุญาตสิทธิ์ Do Not Disturb ให้แอปนี้") {
+            openSettings(Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS))
+        }
+        button("เปิด Settings ระบบ — ค้นหา Do Not Disturb / Allow Alarms") {
+            openSettings(Intent(Settings.ACTION_SETTINGS))
+        }
+        volumeSettingsButton = button(volumeButtonLabel(AlarmVolume.enabled(this), AlarmVolume.minimum(this))) {
+            configureVolume()
+        }
         button("ตั้งค่า channel การปลุก") {
+            AlarmNotifications.channel(this)
             openSettings(Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
                 .putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
-                .putExtra(Settings.EXTRA_CHANNEL_ID, "alarm_playback_v1"))
+                .putExtra(Settings.EXTRA_CHANNEL_ID, AlarmNotifications.CHANNEL_ID))
+        }
+        button("ตั้งค่า channel เร่งด่วน") {
+            AlarmNotifications.channel(this, AlertImportance.URGENT)
+            openSettings(Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
+                .putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
+                .putExtra(Settings.EXTRA_CHANNEL_ID, AlarmNotifications.URGENT_CHANNEL_ID))
         }
         button("ทดสอบเสียงวนจนกดรับทราบ") {
             if (!notificationsEnabled()) {
@@ -290,6 +312,7 @@ class MainActivity : Activity() {
         super.onResume()
         if (resumedOnce && !googleBusy.get() && !authConfigLoading) refreshAuthConfig()
         resumedOnce = true
+        refreshVolumeButton()
         updateLifecycle.resume()
         if (updater.hasHandedOff()) {
             val previous = updater
@@ -322,6 +345,41 @@ class MainActivity : Activity() {
     }
 
     private fun notificationsEnabled(): Boolean = AlarmEngine.notificationsReady(this)
+
+    private fun volumeButtonLabel(enabled: Boolean, minimum: Int): String =
+        "ระดับเสียงขั้นต่ำชั่วคราวขณะปลุกสำคัญ (${if (enabled) "เปิด $minimum%" else "ปิด"})"
+
+    private fun refreshVolumeButton() {
+        volumeSettingsButton.text = volumeButtonLabel(AlarmVolume.enabled(this), AlarmVolume.minimum(this))
+    }
+
+    private fun configureVolume() {
+        val input = EditText(this).apply {
+            inputType = android.text.InputType.TYPE_CLASS_NUMBER
+            setText(AlarmVolume.minimum(this@MainActivity).toString())
+            selectAll()
+        }
+        AlertDialog.Builder(this)
+            .setTitle("ระดับเสียงปลุกขั้นต่ำชั่วคราว (%)")
+            .setMessage("ปรับระดับเสียงปลุกทั้งเครื่องชั่วคราว เฉพาะเมื่อวิกฤตเริ่มเล่นจริง อาจมีผลกับเสียงปลุกของแอปอื่นด้วย ค่าเริ่มต้นเปิด 80%; ตั้ง 1–100% หรือกดปิด ไม่เปลี่ยน DND หรือโหมดเงียบ และกู้ระดับเดิมแบบ best effort หลังหยุดเสียง ถ้าระบบฆ่าแอป/force-stop อาจกู้ไม่ได้")
+            .setView(input)
+            .setNeutralButton("ปิด") { _, _ ->
+                try { AlarmVolume.configure(this, false, AlarmVolume.minimum(this)) }
+                catch (_: Exception) { Toast.makeText(this, "บันทึกไม่ได้", Toast.LENGTH_SHORT).show() }
+                updateStatus()
+            }
+            .setNegativeButton("ยกเลิก", null)
+            .setPositiveButton("เปิด") { _, _ ->
+                val value = input.text.toString().toIntOrNull()
+                if (value == null || value !in 1..100) {
+                    Toast.makeText(this, "กรุณาใส่ 1–100%", Toast.LENGTH_LONG).show()
+                } else {
+                    try { AlarmVolume.configure(this, true, value) }
+                    catch (_: Exception) { Toast.makeText(this, "บันทึกไม่ได้", Toast.LENGTH_SHORT).show() }
+                }
+                updateStatus()
+            }.show()
+    }
 
     private fun updateTask(action: (UpdateClient, Long) -> String) {
         if (!updateBusy.compareAndSet(false, true)) return
@@ -393,18 +451,22 @@ class MainActivity : Activity() {
     }
 
     private fun updateStatus() {
+        refreshVolumeButton()
         val audio = getSystemService(AudioManager::class.java)
         val power = getSystemService(PowerManager::class.java)
         val manager = getSystemService(NotificationManager::class.java)
         status.text = "แจ้งเตือนและ channel: ${if (notificationsEnabled()) "อนุญาต" else "ยังไม่อนุญาต / channel ถูกปิด"}\n" +
             "ระดับเสียงปลุก: ${audio.getStreamVolume(AudioManager.STREAM_ALARM)}/${audio.getStreamMaxVolume(AudioManager.STREAM_ALARM)}\n" +
-            "DND filter: ${manager.currentInterruptionFilter} (ต้องทดสอบเสียงจริง)\n" +
+            "สิทธิ์ Do Not Disturb: ${if (manager.isNotificationPolicyAccessGranted) "อนุญาตแล้ว" else "ยังไม่อนุญาต"}\n" +
+            (if (DndCheck.blocksAlarms(this)) "⚠ Do Not Disturb กำลังห้าม Alarms — วิกฤตและด่วนจะไม่มีเสียงจนกว่าจะอนุญาต Alarms\n"
+            else "DND filter: ${manager.currentInterruptionFilter} (หากบล็อก Alarms เสียงปลุกอาจไม่ดัง)\n") +
+            "ขั้นต่ำชั่วคราว: ${if (AlarmVolume.enabled(this)) "เปิด ${AlarmVolume.minimum(this)}%" else "ปิด"}; ปิดเสียง/เปลี่ยนระดับเองอาจทำให้กู้ระดับเดิมไม่ได้หลัง process kill/force-stop\n" +
             "ยกเว้น battery optimization: ${if (power.isIgnoringBatteryOptimizations(packageName)) "ใช่" else "ยังไม่ยืนยัน / ตรวจใน Settings"}\n" +
             "สถานะ engine: ${AlarmStore.status(this)}"
         val records = AlarmStore.active(this)
         active.text = if (records.isEmpty()) "ไม่มีเหตุการณ์ที่ยังไม่รับทราบ" else
             "ยังไม่รับทราบ ${records.size} เหตุการณ์\n" + records.joinToString("\n") {
-                "• ${if (it.importance == dev.notifyalarm.core.AlertImportance.NORMAL) "ปกติ" else "สำคัญ"}: ${it.title}"
+                "• ${when (it.importance) { AlertImportance.NORMAL -> "ปกติ"; AlertImportance.URGENT -> "เร่งด่วน"; AlertImportance.CRITICAL -> "สำคัญ" }}: ${it.title}"
             }
         sound.text = "เสียงที่ใช้: ${AlarmSoundSettings.label(this)}\nเปลี่ยนแล้วมีผลเมื่อเริ่มเสียงครั้งถัดไป หากเล่นไม่ได้จะใช้เสียงสำรองของแอป"
         ackStatus.text = AckSync.status(this)

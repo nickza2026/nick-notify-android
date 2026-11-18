@@ -83,7 +83,7 @@ func (s *FCM) SendTo(ctx context.Context, target string, data map[string]string,
 	priority := "HIGH"
 	if data["importance"] == "normal" {
 		priority = "NORMAL"
-	} else if data["importance"] != "critical" {
+	} else if data["importance"] != "critical" && data["importance"] != "urgent" {
 		return &SendError{Code: "invalid_importance"}
 	}
 	b, _ := json.Marshal(map[string]any{"message": map[string]any{"token": target, "data": data, "android": map[string]any{"priority": priority, "ttl": fmt.Sprintf("%ds", ttl)}}})

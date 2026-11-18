@@ -246,7 +246,7 @@ func (v input) validated() (string, string, string, int, string, error) {
 	if v.Importance != nil {
 		importance = *v.Importance
 	}
-	if importance != "critical" && importance != "normal" {
+	if importance != "critical" && importance != "normal" && importance != "urgent" {
 		return "", "", "", 0, "", fail(422, "invalid_importance")
 	}
 	return id, *v.Title, *v.Message, ttl, importance, nil
@@ -372,7 +372,7 @@ func (a *API) create(w http.ResponseWriter, r *http.Request) error {
 		TTL        int    `json:"ttl_seconds"`
 		Importance string `json:"importance,omitempty"`
 	}{id, title, message, ttl, func() string {
-		if importance == "normal" {
+		if importance != "critical" {
 			return importance
 		}
 		return ""
@@ -386,7 +386,7 @@ func (a *API) create(w http.ResponseWriter, r *http.Request) error {
 	// Legacy APKs recognize "alert" as an alarm and ignore importance. A distinct
 	// type makes normal fail closed on older clients instead of alarming silently.
 	wireType := "alert"
-	if importance == "normal" {
+	if importance != "critical" {
 		wireType = "notice"
 	}
 	data := map[string]string{"type": wireType, "alert_id": id, "title": title, "message": message, "expires_at": expires.Format(time.RFC3339Nano), "importance": importance}
@@ -477,8 +477,7 @@ func (a *API) create(w http.ResponseWriter, r *http.Request) error {
 	}
 	if len(targets) > 0 {
 		for _, t := range targets {
-			data["ack_token"] = t.cap
-			encoded, _ = json.Marshal(data)
+			encoded, _ = json.Marshal(a.devicePayload(id, data, t))
 			if len(encoded) > payloadLimit {
 				return fail(422, "payload_too_large")
 			}

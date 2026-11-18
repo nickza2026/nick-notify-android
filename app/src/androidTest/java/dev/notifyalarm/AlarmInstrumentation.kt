@@ -62,16 +62,16 @@ class AlarmInstrumentation : Instrumentation() {
             }
             check(started) { "Foreground test alarm could not start" }
             val playbackDeadline = System.currentTimeMillis() + 8000
-            while (!AlarmStore.status(context).startsWith("กำลังส่งเสียงปลุก") && System.currentTimeMillis() < playbackDeadline) Thread.sleep(100)
+            while (!AlarmStore.status(context).startsWith("ตัวเล่นเสียงเริ่มแล้ว") && System.currentTimeMillis() < playbackDeadline) Thread.sleep(100)
             check(AlarmStore.active(context).any { it.id == "$prefix-a" }) { "Active alert missing" }
-            check(AlarmStore.status(context).startsWith("กำลังส่งเสียงปลุก")) { "MediaPlayer did not confirm actual playback: ${AlarmStore.status(context)}" }
+            check(AlarmStore.status(context).startsWith("ตัวเล่นเสียงเริ่มแล้ว")) { "MediaPlayer did not confirm actual playback: ${AlarmStore.status(context)}" }
             shell("input keyevent 223")
             val power = context.getSystemService(PowerManager::class.java)
             val screenDeadline = System.currentTimeMillis() + 4000
             while (power.isInteractive && System.currentTimeMillis() < screenDeadline) Thread.sleep(100)
             check(!power.isInteractive) { "Screen did not actually sleep" }
             while (System.currentTimeMillis() <= latestStart + 500) Thread.sleep(100)
-            check(AlarmStore.status(context).startsWith("กำลังส่งเสียงปลุก")) { "Playback stopped when screen slept" }
+            check(AlarmStore.status(context).startsWith("ตัวเล่นเสียงเริ่มแล้ว")) { "Playback stopped when screen slept" }
             check(AlarmStore.active(context).any { it.id == "$prefix-a" }) { "Delivery expiry incorrectly stopped an already-started alarm" }
             shell("input keyevent 224")
             shell("wm dismiss-keyguard")
@@ -89,7 +89,7 @@ class AlarmInstrumentation : Instrumentation() {
             alarmNotification.actions[0].actionIntent.send()
             Thread.sleep(750)
             check(AlarmStore.active(context).isEmpty()) { "Ack did not clear active records" }
-            check(!AlarmStore.status(context).startsWith("กำลังส่งเสียงปลุก")) { "Playback state remained active after Ack" }
+            check(!AlarmStore.status(context).startsWith("ตัวเล่นเสียงเริ่มแล้ว")) { "Playback state remained active after Ack" }
             check(AlarmStore.isAcknowledged(context, "$prefix-a")) { "Ack tombstone missing" }
             check(AlarmStore.pendingAcknowledgements(context).contains("$prefix-a")) { "Offline ack not queued" }
             check(AlarmStore.acknowledgedAt(context, "$prefix-a") != null) { "Local Ack timestamp missing" }

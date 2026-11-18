@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { mkdtemp, rm, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -121,11 +122,32 @@ test('importance defaults critical; explicit critical replays, normal conflicts,
   assert.equal(f.calls[1].data.type, 'notice');
   const detail = await fetch(`${f.url}/v1/alerts/quiet`, { headers: { authorization: `Bearer ${API_KEY}` } });
   assert.equal((await detail.json()).importance, 'normal');
-  for (const importance of [null, '', 'urgent', 1, false]) {
+  for (const importance of [null, '', 'unknown', 1, false]) {
     const result = await f.post({ ...normal, importance }, { key: `invalid-${String(importance)}` });
     assert.ok([400, 422].includes(result.response.status));
   }
   assert.equal(f.calls.length, 2);
+  const urgentBody = { ...normal, alert_id: 'urgent', importance: 'urgent' };
+  const urgent = await f.post(urgentBody, { key: 'urgent-key' });
+  assert.equal(urgent.response.status, 202);
+  assert.equal(urgent.body.importance, 'urgent');
+  assert.equal(f.calls[2].data.type, 'notice');
+  assert.equal(f.calls[2].data.importance, 'urgent');
+  const urgentReplay = await f.post(urgentBody, { key: 'urgent-key' });
+  assert.deepEqual(urgentReplay.body, urgent.body);
+  assert.equal(urgentReplay.response.headers.get('idempotency-replayed'), 'true');
+  for (const importance of ['normal', 'critical']) {
+    assert.equal((await f.post({ ...urgentBody, importance }, { key: 'urgent-key' })).body.error.code, 'idempotency_conflict');
+  }
+  assert.equal(f.calls.length, 3);
+  const entries = JSON.parse(await readFile(f.statePath, 'utf8')).entries.map(([, entry]) => entry);
+  for (const [importance, alert_id] of [['critical', undefined], ['normal', 'quiet'], ['urgent', 'urgent']]) {
+    // Freeze the original canonical field order, omitting critical exactly as before.
+    const canonical = { title: normal.title, message: normal.message, ttl_seconds: 300,
+      ...(alert_id ? { alert_id } : {}), ...(importance === 'critical' ? {} : { importance }) };
+    const expected = createHash('sha256').update(JSON.stringify(canonical)).digest('hex');
+    assert.equal(entries.find(entry => entry.importance === importance).hash, expected);
+  }
 });
 
 test('legacy persisted receipt remains critical without rewriting state and replay precedes changed payload budget', async t => {
