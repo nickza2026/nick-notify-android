@@ -32,6 +32,45 @@ class ClientApiTest {
             JSONObject().put("code", "invalid_credentials"))), "owner"))
     }
 
+    @Test fun authConfigFailClosedAndGooglePayloadBounded() {
+        assertTrue(GoogleAuthGateway.projectMatches("synthetic-project", "synthetic-project"))
+        assertFalse(GoogleAuthGateway.projectMatches("synthetic-project", "other-project"))
+        assertFalse(GoogleAuthGateway.projectMatches("synthetic-project", null))
+        fun config(mode: String, project: Any?) = ClientApi.Reply(200,
+            JSONObject().put("mode", mode).put("firebase_project_id", project))
+        assertEquals(ClientApi.AuthConfig("password", null),
+            ClientApi.parseAuthConfig(config("password", JSONObject.NULL)))
+        assertEquals("synthetic-project", ClientApi.parseAuthConfig(config("google", "synthetic-project"))?.projectId)
+        for (reply in listOf(config("password", "synthetic-project"), config("google", JSONObject.NULL),
+            config("google", ""), config("other", JSONObject.NULL),
+            ClientApi.Reply(503, config("google", "synthetic-project").body),
+            ClientApi.Reply(200, JSONObject().put("mode", "password")),
+            ClientApi.Reply(200, config("password", JSONObject.NULL).body.put("owner_uid", "leak")))) {
+            assertNull(ClientApi.parseAuthConfig(reply))
+        }
+        val installation = "12345678-1234-1234-1234-123456789012"
+        val payload = ClientApi.googleLoginBody("jwt", installation)
+        assertEquals(setOf("id_token", "installation_id"), payload.keys().asSequence().toSet())
+        assertEquals("jwt", payload.getString("id_token"))
+        assertThrows(IllegalArgumentException::class.java) {
+            ClientApi.googleLoginBody("x".repeat(8193), installation)
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            ClientApi.googleLoginBody("jwt", "not-a-uuid")
+        }
+    }
+
+    @Test fun googleExchangeRejectsForcedPasswordChangeAndWrongPendingLogoutAlias() {
+        val reply = ClientApi.Reply(200, loginResponse())
+        val body = reply.body.getJSONObject("user").put("must_change_password", false)
+        assertEquals("owner", ClientApi.extractGoogleLogin(reply)?.first)
+        assertNull(ClientApi.extractGoogleLogin(reply, "another-owner"))
+        body.put("must_change_password", "false")
+        assertNull(ClientApi.extractGoogleLogin(reply))
+        body.put("must_change_password", true)
+        assertNull(ClientApi.extractGoogleLogin(reply))
+    }
+
     @Test fun forgedLoginSuccessRejected() {
         val body = loginResponse()
         for ((key, value) in listOf("access_token" to "!".repeat(43),

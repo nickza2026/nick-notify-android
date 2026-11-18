@@ -192,6 +192,17 @@ func (a *API) serveDashboard(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) dashboard(w http.ResponseWriter, r *http.Request) error {
 	path := strings.TrimPrefix(r.URL.Path, "/v1/dashboard")
+	if r.Method == "GET" && path == "/auth-config" {
+		return a.googleAuthConfig(w, r)
+	}
+	if r.Method == "POST" && path == "/google-login" {
+		return a.googleLogin(w, r, false)
+	}
+	if a.AuthMode != "" && a.AuthMode != "password" {
+		if e := a.ActivateGoogleAuth(r.Context()); e != nil {
+			return fail(503, "google_auth_unavailable")
+		}
+	}
 	login := r.Method == "POST" && path == "/login"
 	change := r.Method == "POST" && path == "/change-password"
 	logout := r.Method == "POST" && path == "/logout"
@@ -255,6 +266,11 @@ func (a *API) dashboard(w http.ResponseWriter, r *http.Request) error {
 		return e
 	}
 	now := a.now()
+	if login || change {
+		if e := a.passwordAuthAllowed(r.Context(), tx); e != nil {
+			return e
+		}
+	}
 	token := r.Header.Get("X-Dashboard-Session")
 	var expiry time.Time
 	if !login {

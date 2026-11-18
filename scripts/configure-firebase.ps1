@@ -45,6 +45,20 @@ if ($Matches[1] -cne [string]$values.gcm_defaultSenderId) {
 if ($values.google_api_key -notmatch '^[A-Za-z0-9_-]{20,200}$') {
     throw 'Firebase client API key has an invalid format.'
 }
+$webClients = @($client[0].oauth_client | Where-Object { $_.client_type -eq 3 })
+if ($webClients.Count -gt 1) {
+    throw 'Firebase client configuration has ambiguous Web OAuth clients.'
+}
+if ($webClients.Count -eq 1) {
+    $webClientId = $webClients[0].client_id
+    if ($webClientId -isnot [string] -or $webClientId -cnotmatch '^([0-9]{1,20})-[A-Za-z0-9_-]{1,200}\.apps\.googleusercontent\.com$') {
+        throw 'Firebase Web OAuth client ID has an invalid format.'
+    }
+    if ($Matches[1] -cne [string]$values.gcm_defaultSenderId) {
+        throw 'Firebase Web OAuth client and project number do not match.'
+    }
+    $values['default_web_client_id'] = $webClientId
+}
 $xml = New-Object System.Xml.XmlDocument
 $null = $xml.AppendChild($xml.CreateXmlDeclaration('1.0','utf-8',$null))
 $resources = $xml.CreateElement('resources')

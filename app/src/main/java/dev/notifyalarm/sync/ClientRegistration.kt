@@ -26,6 +26,16 @@ object ClientRegistration {
     internal fun <T> serializedNetwork(block: () -> T): T = synchronized(networkLock) { block() }
     internal fun <T> mutateIfCurrent(eligible: () -> Boolean, action: () -> T): T? =
         serializedNetwork { if (eligible()) action() else null }
+
+    /** Serialized Google exchange, with a second eligibility check after the HTTP response. */
+    internal fun googleExchange(eligible: () -> Boolean, transport: () -> ClientApi.Reply,
+                                complete: (ClientApi.Reply) -> Boolean): Boolean =
+        mutateIfCurrent(eligible) {
+            val response = transport()
+            synchronized(ClientAccount.lock) {
+                if (eligible()) complete(response) else false
+            }
+        } ?: false
     private fun constraints() = Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()
 
     fun enqueue(context: Context, tokenChanged: Boolean = false) {
@@ -145,7 +155,7 @@ object ClientRegistration {
     fun status(context: Context): String {
         val session = ClientAccount.session(context)
         if (ClientAccount.pendingLogout(context)) return if (ClientAccount.logoutAuthenticationRequired(context))
-            "เซสชันเดิมใช้ไม่ได้: ใส่รหัสผ่านบัญชีเดิมเพื่อยืนยันออกจากระบบ หรือเพิกถอนเครื่องจาก Dashboard"
+            "เซสชันเดิมใช้ไม่ได้: ตรวจวิธีเข้าสู่ระบบและยืนยันบัญชีเดิมเพื่อออกจากระบบ หรือเพิกถอนเครื่องจาก Dashboard"
         else "รอ server ยืนยันออกจากระบบ — เครื่องยังอาจได้รับแจ้งเตือน"
         if (session == null) return "ยังไม่เข้าสู่ระบบ / เซสชันหมดอายุ"
         if (session.mustChange) return "ต้องเปลี่ยนรหัสผ่านก่อนลงทะเบียนเครื่อง"

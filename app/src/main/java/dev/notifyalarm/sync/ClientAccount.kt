@@ -78,6 +78,11 @@ object ClientAccount {
                 .putLong("generation", p.getLong("generation", 0) + 1).commit()
     }
 
+    /** Cancel this particular in-flight login, never a newer login or an established session. */
+    fun cancelTicket(context: Context, ticket: LoginTicket): Boolean = synchronized(lock) {
+        if (ticketCurrent(context, ticket)) cancelLogin(context) else false
+    }
+
     internal fun ticketCurrent(context: Context, ticket: LoginTicket): Boolean = synchronized(lock) {
         prefs(context).getLong("generation", 0) == ticket.generation &&
             installation(context) == ticket.installation && !pendingLogout(context) &&

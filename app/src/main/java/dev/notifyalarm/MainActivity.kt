@@ -25,6 +25,8 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import android.text.TextWatcher
+import android.text.Editable
 import androidx.core.content.FileProvider
 import com.google.firebase.FirebaseApp
 import com.google.firebase.messaging.FirebaseMessaging
@@ -36,10 +38,12 @@ import dev.notifyalarm.sync.ClientAccount
 import dev.notifyalarm.sync.ClientApi
 import dev.notifyalarm.sync.ClientPolicy
 import dev.notifyalarm.sync.ClientRegistration
+import dev.notifyalarm.sync.GoogleAuthGateway
 import dev.notifyalarm.updates.UpdateClient
 import dev.notifyalarm.updates.UpdateLifecycle
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 
 /** Local-first test screen. No server API key or Firebase credentials in source. */
 class MainActivity : Activity() {
@@ -53,6 +57,22 @@ class MainActivity : Activity() {
     private lateinit var serverInput: EditText
     private lateinit var userInput: EditText
     private lateinit var passwordInput: EditText
+    private lateinit var passwordLoginButton: Button
+    private lateinit var googleLoginButton: Button
+    private lateinit var passwordChangeButton: Button
+    private lateinit var passwordRecoveryButton: Button
+    private var authConfig: ClientApi.AuthConfig? = null
+    private var authConfigBase: String? = null
+    private val googleBusy = AtomicBoolean(false)
+    private val authEpoch = AtomicLong(0)
+    private var googleTicket: ClientAccount.LoginTicket? = null
+
+    private fun invalidateGoogle(): Long = synchronized(ClientAccount.lock) {
+        val epoch = authEpoch.incrementAndGet()
+        googleTicket?.let { ClientAccount.cancelTicket(this, it) }
+        googleTicket = null
+        epoch
+    }
     private lateinit var deviceInput: EditText
     private lateinit var updateMessage: TextView
     private lateinit var updater: UpdateClient
@@ -156,12 +176,28 @@ class MainActivity : Activity() {
             layout.addView(this, LinearLayout.LayoutParams(-1, -2))
         }
         serverInput = input("HTTPS server URL เช่น https://example.com")
+        serverInput.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                invalidateGoogle()
+                googleBusy.set(false)
+                authConfig = null
+                authConfigBase = null
+                if (::googleLoginButton.isInitialized) {
+                    googleLoginButton.isEnabled = true
+                    showAuthMode()
+                }
+            }
+            override fun afterTextChanged(s: Editable?) = Unit
+        })
         userInput = input("ชื่อผู้ใช้ (บัญชีเดียวกันทั้งสองเครื่อง)")
         passwordInput = input("รหัสผ่าน", true)
         deviceInput = input("ชื่อเครื่อง เช่น โทรศัพท์ของฉัน")
         accountStatus = text(ClientRegistration.status(this))
-        accountMessage = text("")
-        button("เข้าสู่ระบบและลงทะเบียนเครื่อง") { login() }
+        accountMessage = text("เลือกตรวจวิธีเข้าสู่ระบบก่อนเข้าสู่ระบบ (ไม่กระทบเสียงปลุก)")
+        button("ตรวจวิธีเข้าสู่ระบบของ server") { refreshAuthConfig() }
+        passwordLoginButton = button("เข้าสู่ระบบและลงทะเบียนเครื่อง") { login() }
+        googleLoginButton = button("เข้าสู่ระบบด้วย Google และลงทะเบียนเครื่อง") { googleLogin() }
         button("ตรวจสอบ / ส่งลงทะเบียนอีกครั้ง") {
             requestFirebaseRegistration()
             accountTask { session ->
@@ -190,9 +226,11 @@ class MainActivity : Activity() {
                 }
             }
         }
-        button("เปลี่ยนรหัสผ่าน") { changePassword() }
-        button("ยืนยันออกจากระบบที่ค้างด้วยรหัสผ่านบัญชีเดิม") { recoverLogout() }
+        passwordChangeButton = button("เปลี่ยนรหัสผ่าน") { changePassword() }
+        passwordRecoveryButton = button("ยืนยันออกจากระบบที่ค้างด้วยรหัสผ่านบัญชีเดิม") { recoverLogout() }
         button("ออกจากระบบ (ไม่หยุดเสียงปลุกที่กำลังเล่น)") {
+            invalidateGoogle()
+            googleBusy.set(false)
             if (ClientAccount.session(this) == null) {
                 ClientAccount.cancelLogin(this)
                 accountMessage.text = "ยกเลิกการเข้าสู่ระบบที่ยังไม่เสร็จ"
@@ -211,6 +249,7 @@ class MainActivity : Activity() {
             updateStatus()
         }
         text("รับทราบหยุดเสียงทันทีโดยไม่รอเน็ต สำหรับเหตุการณ์ใหม่ที่ server แนบ HTTPS Ack route แอปจะจัดคิวส่งเมื่อระบบอนุญาต และแสดงแยกเมื่อ server ยืนยันแล้ว เหตุการณ์รุ่นเก่า/ทดสอบในเครื่องอาจไม่มีช่องทางส่งกลับ ไม่มี full-screen alarm หรือเริ่มเสียงอัตโนมัติหลัง reboot")
+        showAuthMode()
     }
 
     override fun onResume() {
@@ -240,6 +279,7 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
+        invalidateGoogle()
         updater.cancelWork()
         Thread { updater.dispose() }.start()
         super.onDestroy()
@@ -351,13 +391,154 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun showAuthMode() {
+        val mode = authConfig?.mode
+        userInput.visibility = if (mode == "password") View.VISIBLE else View.GONE
+        passwordInput.visibility = if (mode == "password") View.VISIBLE else View.GONE
+        passwordLoginButton.visibility = if (mode == "password") View.VISIBLE else View.GONE
+        passwordChangeButton.visibility = if (mode == "password") View.VISIBLE else View.GONE
+        passwordRecoveryButton.visibility = if (mode == "password") View.VISIBLE else View.GONE
+        googleLoginButton.visibility = if (mode == "google") View.VISIBLE else View.GONE
+    }
+
+    private fun refreshAuthConfig() {
+        val base = ClientPolicy.baseUrl(serverInput.text.toString()) ?: run {
+            accountMessage.text = "กรุณากรอก HTTPS server URL ที่ถูกต้อง"; return
+        }
+        val epoch = invalidateGoogle()
+        authConfig = null
+        authConfigBase = null
+        googleBusy.set(false)
+        googleLoginButton.isEnabled = true
+        showAuthMode()
+        accountMessage.text = "กำลังตรวจวิธีเข้าสู่ระบบ…"
+        Thread {
+            val result = try { ClientApi.authConfig(base) } catch (_: Exception) { null }
+            runOnUiThread {
+                if (isFinishing || isDestroyed || authEpoch.get() != epoch) return@runOnUiThread
+                if (ClientPolicy.baseUrl(serverInput.text.toString()) != base) {
+                    accountMessage.text = "URL เปลี่ยนแล้ว กรุณาตรวจใหม่"; return@runOnUiThread
+                }
+                authConfig = result
+                authConfigBase = if (result != null) base else null
+                showAuthMode()
+                accountMessage.text = when (result?.mode) {
+                    "password" -> "server ใช้รหัสผ่านเดิม"
+                    "google" -> "server ใช้ Google เท่านั้น กรุณาเตรียม Firebase config ของโครงการเดียวกัน"
+                    else -> "ตรวจวิธีเข้าสู่ระบบไม่ได้ / server ยังไม่พร้อม กรุณาอัปเดต server หรือลองใหม่"
+                }
+            }
+        }.start()
+    }
+
+    private fun googleLogin() {
+        val base = ClientPolicy.baseUrl(serverInput.text.toString())
+        val config = authConfig
+        if (base == null || base != authConfigBase || config?.mode != "google" ||
+            config.projectId == null) {
+            accountMessage.text = "กรุณาตรวจวิธีเข้าสู่ระบบของ URL นี้อีกครั้ง"; return
+        }
+        val name = deviceInput.text.toString().trim()
+        val pending = ClientAccount.pendingLogout(this)
+        val old = if (pending) ClientAccount.session(this) else null
+        if (!pending && !ClientPolicy.deviceName(name)) {
+            accountMessage.text = "กรุณากรอกชื่อเครื่อง (1–80 ตัวอักษร)"; return
+        }
+        if (pending && (old == null || !ClientAccount.logoutAuthenticationRequired(this) ||
+                old.base != base)) {
+            accountMessage.text = "ไม่มีรายการออกจากระบบที่ต้องยืนยัน Google สำหรับ URL นี้"; return
+        }
+        if (!pending && ClientAccount.session(this) != null) {
+            accountMessage.text = "กรุณาออกจากระบบเดิมก่อนเข้าสู่ระบบใหม่"; return
+        }
+        if (!GoogleAuthGateway.configuredProject(this, config.projectId)) {
+            accountMessage.text = "Firebase project ในแอปไม่ตรงกับ server หรือยังไม่ได้ตั้งค่า"; return
+        }
+        if (!googleBusy.compareAndSet(false, true)) return
+        val ticket = if (pending) null else ClientAccount.loginTicket(this)
+        if (!pending && ticket == null) {
+            googleBusy.set(false)
+            accountMessage.text = "สถานะบัญชีเปลี่ยนแล้ว กรุณาลองใหม่"; return
+        }
+        val epoch = synchronized(ClientAccount.lock) {
+            googleTicket = ticket
+            authEpoch.incrementAndGet()
+        }
+        googleLoginButton.isEnabled = false
+        accountMessage.text = "กำลังยืนยันบัญชี Google…"
+        GoogleAuthGateway.start(this, config.projectId,
+            { !isFinishing && !isDestroyed && authEpoch.get() == epoch }) { firebaseToken ->
+            if (isFinishing || isDestroyed || authEpoch.get() != epoch) return@start
+            if (firebaseToken == null) {
+                finishGoogle(epoch, "ยกเลิกหรือยืนยัน Google ไม่สำเร็จ ตรวจการตั้งค่าแล้วลองใหม่")
+                return@start
+            }
+            Thread {
+                val message = try {
+                    var response: ClientApi.Reply? = null
+                    var saved = false
+                    val accepted = ClientRegistration.googleExchange({
+                        authEpoch.get() == epoch && authConfigBase == base &&
+                            authConfig?.mode == "google" && authConfig?.projectId == config.projectId &&
+                            !isFinishing && !isDestroyed && if (pending) {
+                                val current = ClientAccount.session(this)
+                                current != null && old != null && ClientAccount.pendingLogout(this) &&
+                                    ClientAccount.logoutAuthenticationRequired(this) &&
+                                    current.generation == old.generation && current.bearer == old.bearer &&
+                                    current.base == old.base && current.installation == old.installation &&
+                                    current.username == old.username
+                            } else ticket != null && ClientAccount.ticketCurrent(this, ticket)
+                    }, {
+                        ClientApi.googleLogin(base, firebaseToken, old?.installation ?: ticket!!.installation)
+                    }) { reply ->
+                        response = reply
+                        val login = ClientApi.extractGoogleLogin(reply, old?.username)
+                        saved = if (login == null) false else if (pending) {
+                            ClientAccount.replacePendingBearer(this, old!!, login.second.first,
+                                login.second.second)
+                        } else ClientAccount.saveLogin(this, ticket!!, base, login.second.first,
+                            name, login.first, false, login.second.second)
+                        true
+                    }
+                    if (!accepted) "สถานะบัญชีเปลี่ยนแล้ว ไม่เก็บผลเข้าสู่ระบบที่หมดอายุ"
+                    else if (saved) {
+                        if (pending) {
+                            ClientRegistration.pendingLogout(this)
+                            "กำลังส่งคำขอออกจากระบบอีกครั้ง เครื่องยังอาจได้รับแจ้งเตือน"
+                        } else {
+                            requestFirebaseRegistration()
+                            ClientRegistration.enqueue(this)
+                            "เข้าสู่ระบบแล้ว กำลังลงทะเบียนเครื่อง"
+                        }
+                    } else when (response?.status) {
+                        401 -> "ยืนยัน Google ไม่สำเร็จ"
+                        403 -> "บัญชี Google นี้ไม่ได้รับอนุญาต"
+                        503 -> "Google login บน server ยังไม่พร้อม"
+                        else -> "เข้าสู่ระบบไม่ได้ หรือข้อมูลตอบกลับไม่ถูกต้อง"
+                    }
+                } catch (_: Exception) { "เชื่อมต่อไม่ได้ / เก็บเซสชันอย่างปลอดภัยไม่ได้" }
+                runOnUiThread { finishGoogle(epoch, message) }
+            }.start()
+        }
+    }
+
+    private fun finishGoogle(epoch: Long, message: String) {
+        if (isFinishing || isDestroyed || authEpoch.get() != epoch) return
+        googleBusy.set(false)
+        googleLoginButton.isEnabled = true
+        accountMessage.text = message
+    }
+
     private fun login() {
         val base = ClientPolicy.baseUrl(serverInput.text.toString())
+        if (base == null || base != authConfigBase || authConfig?.mode != "password") {
+            accountMessage.text = "กรุณาตรวจวิธีเข้าสู่ระบบของ URL นี้อีกครั้ง"; return
+        }
         val username = userInput.text.toString().trim()
         val password = passwordInput.text.toString()
         val name = deviceInput.text.toString().trim()
         passwordInput.text.clear()
-        if (base == null || username.isBlank() || password.isBlank() || !ClientPolicy.deviceName(name)) {
+        if (username.isBlank() || password.isBlank() || !ClientPolicy.deviceName(name)) {
             accountMessage.text = "กรุณากรอก HTTPS URL ชื่อผู้ใช้ รหัสผ่าน และชื่อเครื่อง (1–80 ตัวอักษร)"
             return
         }

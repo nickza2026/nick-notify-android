@@ -4,6 +4,10 @@
 
 ## API — notify-alarm-api
 
+คู่มือกู้บัญชีสำหรับ operator: [กู้ชื่อผู้ใช้และรหัสผ่านเจ้าของ](dashboard-owner-recovery-th.md) (ต้องอนุมัติการใช้ฐานจริงแยก ไม่ใช่ public reset API)
+
+ช่องทาง Sign in with Google สำหรับเจ้าของเดิม: [ตั้งค่า Firebase และ UID](google-owner-login-th.md), [Google login API](fe-google-login-th.md). หลังผูก Google แล้ว การ reset-password ไม่เปิด password login อีก; การเพิกถอน local sessions ใช้ `owner revoke-sessions` ตามคู่มือ Google.
+
 ```dotenv
 HOST=0.0.0.0
 PORT=8787

@@ -54,7 +54,7 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 	if _, e = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(739148521)`); e != nil {
 		return e
 	}
-	for _, name := range []string{"001_init.sql", "002_dashboard_auth.sql", "003_shared_devices.sql"} {
+	for _, name := range []string{"001_init.sql", "002_dashboard_auth.sql", "003_shared_devices.sql", "004_google_owner.sql"} {
 		b, err := migrations.ReadFile("migrations/" + name)
 		if err != nil {
 			return err
