@@ -5,6 +5,7 @@
 - [เปิด dashboard กับ PostgreSQL และอธิบายประวัติ/จำนวน Ack](docs/dashboard-local-th.md)
 - [ตั้งค่า Dashboard login ผู้ดูแลหนึ่งบัญชีและ private bootstrap](docs/dashboard-runtime-th.md)
 - [Frontend contract: login, บังคับเปลี่ยนรหัส, ประวัติ และส่งทดสอบ](docs/fe-dashboard-auth-th.md)
+- [Sign in with Google สำหรับเจ้าของหนึ่งบัญชี: ตั้งค่า Firebase และ UID](docs/google-owner-login-th.md) · [Google login API](docs/fe-google-login-th.md)
 - [API สำหรับ service อื่นส่งแจ้งเตือน](docs/service-integration-th.md)
 - [ระดับ normal เงียบ / critical ปลุก และการตรวจรับบน Pixel](docs/notification-importance-th.md)
 - [Build backoffice ด้วย Docker / GitHub Actions](docs/backoffice-build-th.md)

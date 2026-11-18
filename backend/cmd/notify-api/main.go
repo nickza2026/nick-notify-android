@@ -60,6 +60,18 @@ func run() error {
 		}
 	}
 	api := &backend.API{DB: db, Key: os.Getenv("ALERT_API_KEY"), DeviceTokenKey: deviceTokenKey, AckBase: os.Getenv("ACK_PUBLIC_BASE_URL"), Sender: sender}
+	api.AuthMode = os.Getenv("AUTH_MODE")
+	api.FirebaseProjectID = os.Getenv("FIREBASE_PROJECT_ID")
+	api.FirebaseOwnerUID = os.Getenv("FIREBASE_OWNER_UID")
+	if api.AuthMode == "google" {
+		api.GoogleVerifier, e = backend.NewGoogleTokenVerifier(ctx, api.FirebaseProjectID)
+		if e == nil {
+			e = api.ActivateGoogleAuth(ctx)
+		}
+		if e != nil {
+			log.Print("Google authentication unavailable; operational API remains enabled")
+		}
+	}
 	h, e := api.Handler()
 	if e != nil {
 		return errors.New("invalid API configuration")

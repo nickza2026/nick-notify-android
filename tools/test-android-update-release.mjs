@@ -5,7 +5,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, truncateSync, writeFileS
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { test } from 'node:test';
-import { APK_ASSET, DESCRIPTOR_ASSET, MAX_SIZE, SIGNER, VERSION_NAME, run } from './android-update-release.mjs';
+import { APK_ASSET, DESCRIPTOR_ASSET, MAX_SIZE, SIGNER, VERSION_CODE, VERSION_NAME, run } from './android-update-release.mjs';
 
 function fixture(t) {
   const dir = mkdtempSync(join(tmpdir(), 'notify-update-release-'));
@@ -19,7 +19,7 @@ function fixture(t) {
   return { dir, apk, aapt, signer, descriptor: join(dir, DESCRIPTOR_ASSET) };
 }
 
-function sdk(f, { packageName = 'dev.notifyalarm', versionCode = 8, versionName = '0.8.0-in-app-updates', pin = SIGNER, fail = '' } = {}) {
+function sdk(f, { packageName = 'dev.notifyalarm', versionCode = VERSION_CODE, versionName = VERSION_NAME, pin = SIGNER, fail = '' } = {}) {
   return (exe, args) => {
     assert.equal(args.at(-1), f.apk);
     if (exe === fail) throw new Error('tool failed');
@@ -100,7 +100,7 @@ test('payload mutation during SDK inspection cannot acquire a fresh descriptor',
 
 test('release producer version remains aligned with the actual Gradle app version', () => {
   const gradle = readFileSync(new URL('../app/build.gradle.kts', import.meta.url), 'utf8');
-  assert.equal(gradle.match(/versionCode\s*=\s*(\d+)/)[1], '8');
+  assert.equal(gradle.match(/versionCode\s*=\s*(\d+)/)[1], String(VERSION_CODE));
   assert.equal(gradle.match(/versionName\s*=\s*"([^"]+)"/)[1], VERSION_NAME);
 });
 
@@ -110,7 +110,8 @@ test('workflow manual release has least privilege and no automatic publication',
   assert.match(workflow, /^permissions:\r?\n  contents: read/m);
   assert.match(workflow, /publish-update:[\s\S]*?if: github\.event_name == 'workflow_dispatch' && github\.ref == 'refs\/heads\/main' && inputs\.publish_update == true\s+needs: device-apk/);
   assert.match(workflow, /publish-update:[\s\S]*?permissions:\s+contents: write/);
-  assert.match(workflow, /actions\/download-artifact@v4[\s\S]*?name: notify-alarm-0\.8\.0-in-app-updates-debug-\$\{\{ github\.sha \}\}/);
+  const escapedAsset=APK_ASSET.slice(0,-4).replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+  assert.match(workflow, new RegExp(`actions/download-artifact@v4[\\s\\S]*?name: ${escapedAsset}-\\$\\{\\{ github\\.sha \\}\\}`));
   assert.match(workflow, /gh release create "\$tag"[\s\S]*?--target "\$GITHUB_SHA"/);
   assert.match(workflow, /git ls-remote --exit-code origin "refs\/tags\/\$tag"/);
   assert.match(workflow, /gh api --method POST "repos\/\$GITHUB_REPOSITORY\/git\/refs"[\s\S]*?-f "ref=refs\/tags\/\$tag" -f "sha=\$GITHUB_SHA"/);
@@ -154,7 +155,7 @@ gh() {
     assert.equal(result.status, racing ? 1 : 0, result.stdout + result.stderr);
     const tag = readFileSync(join(f.dir, 'tag-attempt'), 'utf8');
     assert.ok(tag.includes('--method POST repos/synthetic/repo/git/refs'));
-    assert.ok(tag.includes('ref=refs/tags/android-v0.8.0-in-app-updates'));
+    assert.ok(tag.includes(`ref=refs/tags/android-v${VERSION_NAME}`));
     assert.ok(tag.includes('sha=' + '1'.repeat(40)));
     assert.equal(existsSync(join(f.dir, 'release-attempt')), !racing);
     if (!racing) assert.ok(readFileSync(join(f.dir, 'release-attempt'), 'utf8').includes('--verify-tag'));

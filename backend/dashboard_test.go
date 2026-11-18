@@ -125,7 +125,7 @@ func TestDashboardLifecycleAndUpgrade(t *testing.T) {
 	c, _, _ = call(t, a, "POST", "/v1/alerts/preserved/ack", cap, "", action)
 	mustStatus(t, c, 200)
 	// Remove only tables/views introduced by later migrations in this owned test DB.
-	if _, e := db.Exec(`DROP VIEW all_ack_actions; DROP TABLE device_ack_actions, device_deliveries, client_subscriptions, client_sessions, client_devices, client_keys, dashboard_sessions, dashboard_owner`); e != nil {
+	if _, e := db.Exec(`DROP VIEW all_ack_actions; DROP TABLE owner_google_identity, device_ack_actions, device_deliveries, client_subscriptions, client_sessions, client_devices, client_keys, dashboard_sessions, dashboard_owner`); e != nil {
 		t.Fatal(e)
 	}
 	for i := 0; i < 2; i++ {

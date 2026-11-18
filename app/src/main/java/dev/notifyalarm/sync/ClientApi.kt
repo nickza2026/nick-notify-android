@@ -16,7 +16,8 @@ object ClientApi {
 
     fun call(base: String, path: String, bearer: String? = null, payload: JSONObject? = null): Reply {
         require(ClientPolicy.baseUrl(base) == base)
-        require(path in setOf("/v1/client/login", "/v1/client/change-password", "/v1/client/session",
+        require(path in setOf("/v1/client/login", "/v1/client/auth-config", "/v1/client/google-login",
+            "/v1/client/change-password", "/v1/client/session",
             "/v1/client/logout", "/v1/client/keys", "/v1/client/devices/register", "/v1/client/devices"))
         val connection = (URL(base + path).openConnection() as HttpURLConnection)
         try {
@@ -63,6 +64,42 @@ object ClientApi {
 
     fun login(base: String, username: String, password: String, installation: String): Reply =
         call(base, "/v1/client/login", payload = loginBody(username, password, installation))
+
+    data class AuthConfig(val mode: String, val projectId: String?)
+
+    fun authConfig(base: String): AuthConfig? = parseAuthConfig(call(base, "/v1/client/auth-config"))
+
+    fun parseAuthConfig(reply: Reply): AuthConfig? {
+        if (reply.status != 200 || reply.body.keys().asSequence().toSet() !=
+            setOf("mode", "firebase_project_id")) return null
+        val mode = reply.body.opt("mode") as? String ?: return null
+        val project = reply.body.opt("firebase_project_id")
+        return when (mode) {
+            "password" -> if (project == JSONObject.NULL) AuthConfig(mode, null) else null
+            "google" -> if (project is String && project.isNotBlank() && project.length <= 128 &&
+                Regex("^[a-zA-Z0-9][a-zA-Z0-9._:-]*$").matches(project)) AuthConfig(mode, project) else null
+            else -> null
+        }
+    }
+
+    fun googleLogin(base: String, firebaseIdToken: String, installation: String): Reply =
+        call(base, "/v1/client/google-login", payload = googleLoginBody(firebaseIdToken, installation))
+
+    fun googleLoginBody(firebaseIdToken: String, installation: String): JSONObject {
+        require(firebaseIdToken.isNotBlank() && firebaseIdToken.toByteArray(Charsets.UTF_8).size <= 8192)
+        require(canonicalUuid(installation))
+        return JSONObject().put("id_token", firebaseIdToken).put("installation_id", installation)
+    }
+
+    /** Google login alias comes from the server, never from an untrusted Google profile. */
+    fun extractGoogleLogin(reply: Reply, expectedAlias: String? = null): Pair<String, Triple<String, String, Boolean>>? {
+        val alias = text(reply.body.optJSONObject("user") ?: return null, "username") ?: return null
+        if (expectedAlias != null && alias != expectedAlias) return null
+        if (!Regex("^[A-Za-z0-9_-]{1,128}$").matches(alias)) return null
+        val login = extractLogin(reply, alias) ?: return null
+        if (login.third) return null
+        return alias to login
+    }
 
     fun loginBody(username: String, password: String, installation: String): JSONObject =
         JSONObject().put("username", username).put("password", password).put("installation_id", installation)

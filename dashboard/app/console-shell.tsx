@@ -6,7 +6,7 @@ import { useEffect, useState } from 'react';
 import { Alert, Button, ConfigProvider, Select } from 'antd';
 import { clientJSON } from '@/lib/client';
 
-export default function ConsoleShell({ username, children }: { username: string; children: React.ReactNode }) {
+export default function ConsoleShell({ username, authMode='password', children }: { username: string; authMode?:'password'|'google'; children: React.ReactNode }) {
   const path = usePathname();
   const [theme, setTheme] = useState('dark');
   const [error, setError] = useState('');
@@ -45,7 +45,7 @@ export default function ConsoleShell({ username, children }: { username: string;
       </nav>
       <div className="account-controls">
         <ConfigProvider theme={{ token: { fontSize: 14 } }}><Select className="theme-control" aria-label="รูปแบบสี" value={theme} onChange={changeTheme} options={[{ value: 'dark', label: 'มืด' }, { value: 'light', label: 'สว่าง' }, { value: 'system', label: 'ตามระบบ' }]} /></ConfigProvider>
-        <Link href="/change-password" className="account-link">{username}</Link>
+        {authMode==='google' ? <span className="account-link" title="เข้าสู่ระบบด้วย Google">{username}</span> : <Link href="/change-password" className="account-link">{username}</Link>}
         <Button onClick={logout} loading={busy}>ออกจากระบบ</Button>
       </div>
     </div></header>

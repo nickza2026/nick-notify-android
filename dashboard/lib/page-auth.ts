@@ -3,6 +3,7 @@ import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { authDTO, publicConfig, sessionToken } from './security';
 import { callBackend } from './backend';
+import {backendAuthConfig} from './google-contract';
 export async function requirePageSession(temporary = false) {
   const h=await headers();
   const config=publicConfig();
@@ -12,6 +13,11 @@ export async function requirePageSession(temporary = false) {
   if(result.status===401 && (result.data as {error?:{code?:string}})?.error?.code==='session_required')redirect('/login');
   if(result.status!==200)throw Error('ระบบยืนยันตัวตนไม่พร้อมใช้งาน');
   const session=authDTO(result.data);
+  const method=await callBackend('/v1/dashboard/auth-config');
+  if(method.status!==200)throw Error('ระบบยืนยันตัวตนไม่พร้อมใช้งาน');
+  const auth=backendAuthConfig(method.data);
+  if(auth.mode==='google' && session.user.must_change_password)redirect('/login');
+  if(auth.mode==='google' && temporary)redirect('/');
   if(session.user.must_change_password&&!temporary)redirect('/change-password');
-  return session;
+  return {...session,authMode:auth.mode};
 }

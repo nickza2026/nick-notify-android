@@ -1,6 +1,7 @@
 package dev.notifyalarm.sync
 
 import android.content.Context
+import dev.notifyalarm.MainActivity
 import dev.notifyalarm.R
 import dev.notifyalarm.core.AlarmEngine
 import org.junit.Assert.*
@@ -8,6 +9,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
+import org.robolectric.Robolectric
 import org.xmlpull.v1.XmlPullParser
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -96,6 +98,87 @@ class ClientLifecycleTest {
         first.join(3000); second.join(3000)
         assertEquals(1, calls.get())
         assertEquals(serverBearer, savedBearer)
+    }
+
+    @Test fun googleCallbackQueuedBehindRegistrationRechecksCancelledTicketBeforeHttp() {
+        val context: Context = RuntimeEnvironment.getApplication()
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val calls = AtomicInteger()
+        val ticket = ClientAccount.loginTicket(context)!!
+        val registration = Thread { ClientRegistration.serializedNetwork {
+            entered.countDown()
+            release.await(3, TimeUnit.SECONDS)
+        } }
+        registration.start()
+        assertTrue(entered.await(1, TimeUnit.SECONDS))
+        val google = Thread {
+            ClientRegistration.mutateIfCurrent({ ClientAccount.ticketCurrent(context, ticket) }) {
+                calls.incrementAndGet() // Would be the Google exchange request.
+            }
+        }
+        google.start()
+        assertTrue(ClientAccount.cancelLogin(context))
+        release.countDown()
+        registration.join(3000)
+        google.join(3000)
+        assertEquals(0, calls.get())
+    }
+
+    @Test fun googleSuccessAfterUrlOrConfigInvalidationDoesNotSaveOrRegister() {
+        val responseEntered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val persisted = AtomicInteger()
+        val registered = AtomicInteger()
+        var epoch = 1
+        val thread = Thread {
+            ClientRegistration.googleExchange({ epoch == 1 }, {
+                responseEntered.countDown()
+                release.await(3, TimeUnit.SECONDS)
+                ClientApi.Reply(200, org.json.JSONObject())
+            }) {
+                persisted.incrementAndGet()
+                registered.incrementAndGet()
+                true
+            }
+        }
+        thread.start()
+        assertTrue(responseEntered.await(1, TimeUnit.SECONDS))
+        epoch++ // URL edit or refreshed auth configuration while HTTP is paused.
+        release.countDown()
+        thread.join(3000)
+        assertEquals(0, persisted.get())
+        assertEquals(0, registered.get())
+    }
+
+    @Test fun googleSuccessAfterActivityDestroyedDoesNotSaveOrRegister() {
+        val controller = Robolectric.buildActivity(MainActivity::class.java).create()
+        val activity = controller.get()
+        val responseEntered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val persisted = AtomicInteger()
+        val thread = Thread {
+            ClientRegistration.googleExchange({ !activity.isDestroyed }, {
+                responseEntered.countDown()
+                release.await(3, TimeUnit.SECONDS)
+                ClientApi.Reply(200, org.json.JSONObject())
+            }) { persisted.incrementAndGet(); true }
+        }
+        thread.start()
+        assertTrue(responseEntered.await(1, TimeUnit.SECONDS))
+        controller.destroy()
+        release.countDown()
+        thread.join(3000)
+        assertEquals(0, persisted.get())
+    }
+
+    @Test fun staleGoogleActivityCannotCancelNewerLoginTicket() {
+        val context: Context = RuntimeEnvironment.getApplication()
+        val first = ClientAccount.loginTicket(context)!!
+        assertTrue(ClientAccount.cancelTicket(context, first))
+        val next = ClientAccount.loginTicket(context)!!
+        assertFalse(ClientAccount.cancelTicket(context, first))
+        assertTrue(ClientAccount.ticketCurrent(context, next))
     }
 
     @Test fun passwordRotationRegistrationAndRecoveryShareOneMutationQueue() {

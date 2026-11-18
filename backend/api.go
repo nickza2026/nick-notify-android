@@ -35,6 +35,10 @@ type SendError struct {
 func (e *SendError) Error() string { return e.Code }
 
 type API struct {
+	AuthMode                            string
+	FirebaseProjectID                   string
+	FirebaseOwnerUID                    string
+	GoogleVerifier                      GoogleTokenVerifier
 	DB                                  *sql.DB
 	Key                                 string
 	DeviceTokenKey                      []byte

@@ -1,0 +1,25 @@
+// LOCAL editable implementation diagram; READY FOR HUMAN REVIEW, NOT APPROVED.
+// Derived from migration 004_google_owner.sql; no DB execution or external upload.
+// Only tables/columns relevant to Google owner binding are shown. The owner
+// table below is intentionally partial: see earlier migrations for its full DDL.
+Project google_owner_login {
+  database_type: 'PostgreSQL'
+  Note: 'Existing singleton owner only; first Google user cannot become owner. Binding survives password-mode downgrade. Diagram is not production approval.'
+}
+
+Table dashboard_owner {
+  id smallint [pk, note: 'Existing owner; earlier schema CHECK id = 1']
+  username text [not null, note: 'Legacy owner alias; this is NOT Firebase UID']
+  Note: 'Partial projection of the existing table: password hash, bootstrap hash, flags, counters and other existing columns omitted.'
+}
+
+Table owner_google_identity {
+  owner_id integer [pk, ref: > dashboard_owner.id, note: 'Actual migration type integer; references existing smallint id']
+  project_id text [not null, note: 'Firebase project ID bound to existing owner']
+  uid text [not null, note: 'Exact Firebase Auth UID, not Google OAuth sub, email or username']
+  bound_at timestamptz [not null]
+  Note: 'Migration declares PK/FK and NOT NULL only; do not infer unique constraints on project_id or uid, or a new CHECK from this diagram.'
+}
+
+// Existing dashboard_sessions and client_sessions are intentionally omitted:
+// first binding and operator revoke clear local rows, not devices/history/Ack.

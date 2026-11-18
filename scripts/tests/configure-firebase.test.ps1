@@ -40,6 +40,19 @@ try {
     if (($strings | Where-Object name -eq 'project_id').'#text' -cne 'notify-demo-123') { throw 'Wrong project ID resource' }
     if (($log -join '') -match 'AIza|123456789012|abcdef1234567890|notify-demo-123') { throw 'Script output disclosed configuration values' }
     $passed++; Write-Output 'PASS valid synthetic config generates expected resources without printing values'
+    $google = New-Config
+    $webClientId = '123456789012-syntheticwebclient.apps.googleusercontent.com'
+    $google.client[0].oauth_client = @(@{client_type=1;client_id='ignored-android-client'},@{client_type=3;client_id=$webClientId})
+    Write-Config $google
+    $log = & $script -GoogleServicesJson $inputFile -OutputPath $output
+    [xml]$withGoogle = Get-Content -Raw -Encoding UTF8 -LiteralPath $output
+    $web = @($withGoogle.resources.string | Where-Object name -eq 'default_web_client_id')
+    if ($web.Count -ne 1 -or $web[0].'#text' -cne $webClientId) { throw 'Google Web client resource missing or incorrect' }
+    if (($log -join '') -match 'syntheticwebclient|123456789012') { throw 'Script output disclosed OAuth configuration' }
+    $passed++; Write-Output 'PASS Google configuration emits exactly the selected Web OAuth client without printing it'
+    Expect-Rejected 'invalid Web OAuth client' { param($c) $c.client[0].oauth_client = @(@{client_type=3;client_id='bad-client'}) }
+    Expect-Rejected 'Web OAuth project mismatch' { param($c) $c.client[0].oauth_client = @(@{client_type=3;client_id='999999999999-synthetic.apps.googleusercontent.com'}) }
+    Expect-Rejected 'ambiguous Web OAuth clients' { param($c) $c.client[0].oauth_client = @(@{client_type=3;client_id='123456789012-first.apps.googleusercontent.com'},@{client_type=3;client_id='123456789012-second.apps.googleusercontent.com'}) }
     Expect-Rejected 'wrong package' { param($c) $c.client[0].client_info.android_client_info.package_name = 'dev.other' }
     Expect-Rejected 'case-sensitive package' { param($c) $c.client[0].client_info.android_client_info.package_name = 'DEV.NOTIFYALARM' }
     Expect-Rejected 'duplicate matching client' { param($c) $c.client = @($c.client[0], $c.client[0]) }

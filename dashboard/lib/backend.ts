@@ -3,12 +3,15 @@ import { readFile } from 'node:fs/promises';
 import { NextResponse } from 'next/server';
 import { parseHistory, parseStats, parseDetail, parseDevices, validDeviceId, validUtc } from './protocol';
 import { authDTO, backendURL, boundedJSON, publicConfig, sessionToken, tokenPattern, trustedRequest } from './security';
+import {backendAuthConfig,firebaseWebConfig,googleLoginBody} from './google-contract';
 
 const messages: Record<string,string> = { session_required:'กรุณาเข้าสู่ระบบ', password_change_required:'กรุณาเปลี่ยนรหัสผ่านก่อนใช้งาน', invalid_credentials:'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง', invalid_schema:'ข้อมูลคำขอไม่ถูกต้อง', invalid_password:'รหัสผ่านต้องมีอย่างน้อย 15 ตัวอักษร และไม่เกิน 128 ไบต์', password_unchanged:'รหัสผ่านใหม่ต้องต่างจากเดิม', rate_limited:'คำขอมากเกินไป กรุณารอแล้วลองใหม่', dashboard_not_configured:'ระบบยังไม่พร้อมใช้งาน', temporarily_unavailable:'ระบบไม่พร้อมใช้งานชั่วคราว', server_configuration:'การตั้งค่าเซิร์ฟเวอร์ไม่ถูกต้อง', invalid_origin:'ไม่อนุญาตคำขอจากต้นทางนี้', upstream_error:'ไม่สามารถยืนยันผลจากเซิร์ฟเวอร์ได้ โปรดตรวจสอบประวัติก่อนส่งอีกครั้ง' };
 Object.assign(messages, { invalid_message:'หัวข้อหรือข้อความไม่ถูกต้อง',invalid_alert_id:'รหัสเหตุการณ์ไม่ถูกต้อง',invalid_ttl:'TTL ไม่ถูกต้อง',invalid_importance:'ระดับแจ้งเตือนไม่ถูกต้อง',payload_too_large:'ข้อความมีขนาดไบต์เกินกำหนด',idempotency_key_required:'ต้องระบุรหัสคำขอ',idempotency_conflict:'รหัสคำขอนี้ถูกใช้กับข้อมูลอื่นแล้ว',alert_id_conflict:'รหัสเหตุการณ์ถูกใช้แล้ว',not_found:'ไม่พบเหตุการณ์',provider_delivery_unknown:'ไม่ทราบผลส่ง โปรดตรวจสอบประวัติ',delivery_state_unavailable:'ไม่สามารถยืนยันผลบันทึกการส่งได้ โปรดตรวจสอบประวัติ',expired_before_send:'หมดช่วงเวลาเริ่มแจ้งเตือนก่อนส่ง',provider_unavailable:'ผู้ให้บริการไม่พร้อมใช้งาน',provider_rejected:'ผู้ให้บริการปฏิเสธคำขอ' });
 Object.assign(messages,{fcm_not_configured:'ระบบส่งแจ้งเตือนยังไม่พร้อม',database_unavailable:'ระบบข้อมูลไม่พร้อมชั่วคราว',delivery_unknown_or_in_progress:'ยังไม่ทราบผลหรือคำขอกำลังดำเนินการ โปรดตรวจประวัติ',json_required:'ต้องใช้ข้อมูล JSON',body_too_large:'คำขอมีขนาดเกินกำหนด',request_interrupted:'คำขอถูกขัดจังหวะ',invalid_from:'วันเริ่มไม่ถูกต้อง',invalid_to:'วันสิ้นสุดไม่ถูกต้อง',invalid_range:'ช่วงเวลาไม่ถูกต้อง',invalid_status:'สถานะไม่ถูกต้อง',invalid_limit:'จำนวนรายการไม่ถูกต้อง',invalid_cursor:'ตำแหน่งหน้าถัดไปไม่ถูกต้อง'});
 messages.provider_authentication_failed='ระบบผู้ให้บริการไม่สามารถยืนยันตัวตนได้';
 Object.assign(messages, {no_devices_registered:'ยังไม่มีอุปกรณ์ลงทะเบียนรับแจ้งเตือน',partial_provider_outcome:'ผลส่งแต่ละเครื่องไม่ครบหรือแตกต่างกัน โปรดตรวจรายละเอียดรายเครื่อง',device_not_found:'ไม่พบอุปกรณ์'});
+Object.assign(messages, {google_auth_unavailable:'ระบบ Google login ยังไม่พร้อม กรุณาตรวจการตั้งค่า Firebase กับผู้ดูแล',invalid_google_credentials:'ไม่สามารถยืนยัน Google login ได้ กรุณาเข้าสู่ระบบใหม่',google_account_not_allowed:'บัญชี Google นี้ไม่ได้รับอนุญาต',google_login_required:'บัญชีนี้ใช้ Sign in with Google แทนรหัสผ่าน'});
+Object.assign(messages,{password_auth_disabled:'บัญชีนี้ไม่เปิดใช้รหัสผ่าน กรุณาใช้ Sign in with Google',google_auth_disabled:'ระบบยังไม่เปิด Google login',invalid_id_token:'ข้อมูล Google login ไม่ถูกต้อง กรุณาเข้าสู่ระบบใหม่'});
 export function failure(code: string, status: number) { return NextResponse.json({ error: messages[code] ?? messages.upstream_error, code }, { status, headers: {'Cache-Control':'no-store'} }); }
 export const invalidQuery = () => failure('invalid_schema',400);
 export const invalidOrigin = () => failure('invalid_origin',403);
@@ -39,22 +42,51 @@ function backendError(result: {data:unknown;status:number;retry:string|null}) {
   if(result.status===429 && result.retry && /^\d{1,6}$/.test(result.retry)) response.headers.set('Retry-After',result.retry);
   return response;
 }
-export async function authRoute(request: Request, action: 'login'|'session'|'change-password'|'logout') {
+function configuredFirebaseWeb() {
+  return firebaseWebConfig({apiKey:process.env.FIREBASE_WEB_API_KEY,authDomain:process.env.FIREBASE_WEB_AUTH_DOMAIN,projectId:process.env.FIREBASE_WEB_PROJECT_ID,appId:process.env.FIREBASE_WEB_APP_ID});
+}
+export async function googleSetupConfigRoute(request:Request) {
+  const rejected=guard(request);if(rejected)return rejected;
+  if(request.method!=='GET' || new URL(request.url).search)return invalidQuery();
+  try {
+    // Public client configuration only. This never binds an owner or issues a session.
+    return NextResponse.json({firebase:configuredFirebaseWeb()},{headers:{'Cache-Control':'no-store'}});
+  } catch {return failure('server_configuration',503);}
+}
+export async function authConfigRoute(request:Request) {
+  const rejected=guard(request);if(rejected)return rejected;
+  if (request.method!=='GET' || new URL(request.url).search) return invalidQuery();
+  try {
+    const result=await callBackend('/v1/dashboard/auth-config');
+    if (result.status!==200) return backendError(result);
+    const config=backendAuthConfig(result.data);
+    const firebase=config.mode==='google' ? configuredFirebaseWeb() : null;
+    if (firebase && firebase.projectId!==config.firebase_project_id) throw Error('server_configuration');
+    return NextResponse.json({...config,firebase},{headers:{'Cache-Control':'no-store'}});
+  } catch(cause) {return failure(cause instanceof Error && cause.message==='server_configuration'?'server_configuration':'upstream_error',cause instanceof Error && cause.message==='server_configuration'?503:502);}
+}
+export async function authRoute(request: Request, action: 'login'|'google-login'|'session'|'change-password'|'logout') {
   const rejected=guard(request,action!=='session'); if(rejected)return rejected;
   try {
     const token=sessionToken(request.headers.get('cookie'));
     let body: unknown;
-    if(action==='login'||action==='change-password') {
+    if(action==='google-login') {
+      if(Number(request.headers.get('content-length')??0)>16384) return invalidQuery();
+      try {body=googleLoginBody(await boundedJSON(request,16384));} catch {return invalidQuery();}
+    } else if(action==='login'||action==='change-password') {
       if(Number(request.headers.get('content-length')??0)>4096) return invalidQuery();
       try { body=await boundedJSON(request,4096); } catch {return invalidQuery();}
       const v=body as Record<string,unknown>; const keys=action==='login'?['username','password']:['current_password','new_password'];
       if(!v || typeof v!=='object' || Array.isArray(v) || Object.keys(v).length!==2 || keys.some(k=>typeof v[k]!=='string' || (v[k] as string).length>1024) || Object.keys(v).some(k=>!keys.includes(k)))return invalidQuery();
     }
-    if(action!=='login'&&action!=='logout'&&!token)return cookie(failure('session_required',401));
-    const result=await callBackend(`/v1/dashboard/${action}`,token,body,undefined,action==='session'?'GET':'POST');
+    if(action!=='login'&&action!=='google-login'&&action!=='logout'&&!token)return cookie(failure('session_required',401));
+    const loginAction=action==='login'||action==='google-login';
+    const result=await callBackend(`/v1/dashboard/${action}`,loginAction?undefined:token,body,undefined,action==='session'?'GET':'POST');
     if(result.status!==200){const response=backendError(result);return action==='logout'?cookie(response):response;}
     if(action==='logout')return cookie(NextResponse.json({ok:true},{headers:{'Cache-Control':'no-store'}}));
-    const dto=authDTO(result.data); const response=NextResponse.json(dto,{headers:{'Cache-Control':'no-store'}});
+    const dto=authDTO(result.data);
+    if(action==='google-login' && dto.user.must_change_password) throw Error('upstream_error');
+    const response=NextResponse.json(dto,{headers:{'Cache-Control':'no-store'}});
     if(action!=='session') {const newToken=(result.data as {session_token?:string}).session_token;if(!newToken || !tokenPattern.test(newToken))throw Error('upstream_error');cookie(response,newToken,dto.expires_at);}
     return response;
   } catch(e) {const response=failure(e instanceof Error && e.message==='server_configuration'?'server_configuration':'upstream_error',e instanceof Error && e.message==='server_configuration'?503:502);return action==='logout'?cookie(response):response;}

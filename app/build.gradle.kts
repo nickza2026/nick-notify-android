@@ -10,8 +10,8 @@ android {
         applicationId = "dev.notifyalarm"
         minSdk = 26
         targetSdk = 35
-        versionCode = 8
-        versionName = "0.8.0-in-app-updates"
+        versionCode = 9
+        versionName = "0.9.0-google-owner"
         testInstrumentationRunner = "dev.notifyalarm.AlarmInstrumentation"
     }
     signingConfigs {
@@ -44,6 +44,10 @@ android {
 dependencies {
     implementation(platform("com.google.firebase:firebase-bom:33.13.0"))
     implementation("com.google.firebase:firebase-messaging")
+    implementation("com.google.firebase:firebase-auth")
+    implementation("androidx.credentials:credentials:1.3.0")
+    implementation("androidx.credentials:credentials-play-services-auth:1.3.0")
+    implementation("com.google.android.libraries.identity.googleid:googleid:1.1.1")
     implementation("androidx.work:work-runtime:2.10.1")
     implementation("androidx.core:core:1.12.0")
     testImplementation("junit:junit:4.13.2")
